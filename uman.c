@@ -34,7 +34,6 @@ module_param(default_slave, charp, 0);
 MODULE_PARM_DESC(default_slave, "Default slave interface");
 
 struct uman {
-    struct net_device_stats stats;
     struct net_device *dev;
 
     struct slave {
@@ -760,25 +759,35 @@ static void uman_uninit(struct net_device *uman_dev)
         uman_emancipate_and_destroy(uman_dev, slave->dev);
 }
 
+static const struct device_type uman_type = {
+	.name = "uman",
+};
 
-static void uman_setup(struct net_device *dev)
+static void uman_setup(struct net_device *uman_dev)
 {
-    struct uman *priv;
+    struct uman *uman = netdev_priv(uman_dev);
 
-    ether_setup(dev); /* assign some of the fields */
-    dev->netdev_ops   = &uman_netdev_ops;
-    dev->ethtool_ops  = &uman_ethtool_ops;
-    dev->features    |= NETIF_F_HW_CSUM;
+    uman->dev = uman_dev;
+    uman->slave.dev = NULL;
 
+    ether_setup(uman_dev); /* assign some of the fields */
+
+    SET_NETDEV_DEVTYPE(uman_dev, &uman_type);
+
+    /* Initialize the device options */
+    uman_dev->flags |= IFF_MASTER;
+    uman_dev->priv_flags |= IFF_BONDING | IFF_UNICAST_FLT | IFF_NO_QUEUE;
+    uman_dev->priv_flags &= ~(IFF_XMIT_DST_RELEASE | IFF_TX_SKB_SHARING);
+
+    uman_dev->netdev_ops   = &uman_netdev_ops;
+    uman_dev->ethtool_ops  = &uman_ethtool_ops;
+    uman_dev->features    |= NETIF_F_HW_CSUM;
+    uman_dev->features |= NETIF_F_LLTX;
+
+
+#if 0
     netdev_lockdep_set_classes(dev);
-
-
-    /*
-     * Then, initialize the priv field. This encloses the statistics
-     * and a few private fields.
-     */
-    priv = netdev_priv(dev);
-    memset(priv, 0, sizeof(struct uman));
+#endif
 }
 
 static int __init uman_init_module(void)
