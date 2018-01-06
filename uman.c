@@ -527,7 +527,7 @@ static int uman_emancipate_and_destroy(struct net_device *uman_dev, struct net_d
     VERBOSE_LOG_FUNENTRY();
 
     ret = uman_emancipate(uman_dev, slave_dev);
-    if (ret == 0 && !uman_has_slave(uman)) {
+    if (ret == 0 && !uman_has_slave(uman)) { /* TODO second cond should be unnecessary */ 
         uman_dev->priv_flags |= IFF_DISABLE_NETPOLL;
         netdev_info(uman_dev, "Destroying bond %s\n", uman_dev->name);
         unregister_netdevice(uman_dev);
@@ -792,12 +792,15 @@ static struct notifier_block uman_netdev_notifier = {
 };
 
 /*--------------------------------- DebugFS ---------------------------------*/
-static struct dentry *debugfs_dir = 0;
+static struct dentry *debugfs_dir;
 static ssize_t debugfs_get_slave(struct file *file, char __user *buff, size_t count, loff_t *offset)
 {
     struct net_device *uman_dev = file->f_inode->i_private;
     struct uman *uman = netdev_priv(uman_dev);
     struct slave *slave = uman_slave(uman);
+
+    if (IS_ERR_OR_NULL(debugfs_dir))
+        return -EIO;
 
     if (!slave)
         return -EAGAIN;
@@ -809,9 +812,13 @@ static ssize_t debugfs_set_slave(struct file *file, const char __user *buff, siz
     struct net_device *uman_dev = file->f_inode->i_private;
     struct net_device *slave_dev;
     char ifname[IFNAMSIZ+1];
-    ssize_t nulpos;
+    ssize_t ret, nulpos;
     int result;
-    ssize_t ret = simple_write_to_buffer(ifname, sizeof ifname - 1, offset, buff, count);
+
+    if (IS_ERR_OR_NULL(debugfs_dir))
+        return -EIO;
+
+    ret = simple_write_to_buffer(ifname, sizeof ifname - 1, offset, buff, count);
     if (ret <= 0)
         return ret;
 
@@ -875,6 +882,9 @@ static const struct net_device_ops uman_netdev_ops;
 static int uman_init(struct net_device *uman_dev)
 {
     VERBOSE_LOG_FUNENTRY();
+
+    netdev_lockdep_set_classes(uman_dev);
+
     /* Ensure valid dev_addr */
     if (is_zero_ether_addr(uman_dev->dev_addr) &&
         uman_dev->addr_assign_type == NET_ADDR_PERM)
@@ -893,7 +903,7 @@ static void uman_uninit(struct net_device *uman_dev)
 }
 
 static const struct device_type uman_type = {
-	.name = "uman",
+    .name = "uman",
 };
 
 static void uman_setup(struct net_device *uman_dev)
@@ -906,22 +916,29 @@ static void uman_setup(struct net_device *uman_dev)
 
     ether_setup(uman_dev); /* assign some of the fields */
 
+    uman_dev->netdev_ops   = &uman_netdev_ops;
+    uman_dev->ethtool_ops  = &uman_ethtool_ops;
+
+    uman_dev->destructor = free_netdev; /* TODO is this necessary? */
+
     SET_NETDEV_DEVTYPE(uman_dev, &uman_type);
 
     /* Initialize the device options */
-    uman_dev->flags |= IFF_MASTER;
+    uman_dev->flags      |= IFF_MASTER;
     uman_dev->priv_flags |= IFF_BONDING | IFF_UNICAST_FLT | IFF_NO_QUEUE;
     uman_dev->priv_flags &= ~(IFF_XMIT_DST_RELEASE | IFF_TX_SKB_SHARING);
 
-    uman_dev->netdev_ops   = &uman_netdev_ops;
-    uman_dev->ethtool_ops  = &uman_ethtool_ops;
-    uman_dev->features    |= NETIF_F_HW_CSUM;
+    uman_dev->features |= NETIF_F_HW_CSUM;
     uman_dev->features |= NETIF_F_LLTX;
+}
 
-
-#if 0
-    netdev_lockdep_set_classes(dev);
-#endif
+static void __exit uman_exit_module(void)
+{
+    VERBOSE_LOG_FUNENTRY();
+    if (!IS_ERR_OR_NULL(debugfs_dir))
+        debugfs_remove_recursive(debugfs_dir);
+    unregister_netdevice_notifier(&uman_netdev_notifier);
+    printk(DRV_NAME ": Exiting module\n");
 }
 
 static int __init uman_init_module(void)
@@ -935,12 +952,12 @@ static int __init uman_init_module(void)
 
     uman_dev = alloc_netdev(sizeof(struct uman), "uman%d", NET_NAME_UNKNOWN, uman_setup);
 
-    if (!uman_dev) {
+    if (!uman_dev)
         return -ENOMEM;
-    }
 
     if ((ret = register_netdev(uman_dev))) {
         printk("uman: error %i registering device \"%s\"\n", ret, uman_dev->name);
+        free_netdev(uman_dev);
         return -ENODEV;
     }
 
@@ -955,15 +972,8 @@ static int __init uman_init_module(void)
     }
 
     printk(DRV_NAME ": Initialized module with interface %s@%p\n", uman_dev->name, uman_dev);
-    return 0;
-}
 
-static void __exit uman_exit_module(void)
-{
-    VERBOSE_LOG_FUNENTRY();
-    debugfs_remove_recursive(debugfs_dir);
-    unregister_netdevice_notifier(&uman_netdev_notifier);
-    printk(DRV_NAME ": Exiting module\n");
+    return 0;
 }
 
 
