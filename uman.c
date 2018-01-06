@@ -34,12 +34,12 @@ static char *default_slave; /* TODO */
 module_param(default_slave, charp, 0);
 MODULE_PARM_DESC(default_slave, "Default slave interface");
 
-int verbose; /* FIXME wasn't there a more idiomatic way? */
+int verbose = 1; /* FIXME wasn't there a more idiomatic way? */
 /* I think /usr/src/linux/Documentation/dynamic-debug-howto.txt */
-module_param(verbose, int, 0);
-MODULE_PARM_DESC(verbose, "0 = normal, 1 = narrate every function call");
+module_param(verbose, int, 1);
+MODULE_PARM_DESC(verbose, "0 != 1, 1 = narrate every function call");
 
-#define VERBOSE_LOG(...) do { if (verbose) printk(DRV_NAME __VA_ARGS__); } while (0)
+#define VERBOSE_LOG(...) do { if (verbose) printk(DRV_NAME ": " __VA_ARGS__); } while (0)
 #define VERBOSE_LOG_FUNENTRY() VERBOSE_LOG("%s()", __func__)
 
 struct uman {
@@ -718,9 +718,9 @@ static const char *const __event_string_of[] = {
 #define LAST_NETDEV_EVENT (NETDEV_CHANGE_TX_QUEUE_LEN+1)
 static inline const char *event_string_of(unsigned long event) {
     if (event >= LAST_NETDEV_EVENT)
-        return __event_string_of[event];
+        return "<out of bounds>";
 
-    return "<out of bounds>";
+    return __event_string_of[event];
 }
 
 static int uman_slave_netdev_event(unsigned long event, struct net_device *slave_dev)
@@ -793,24 +793,27 @@ static struct notifier_block uman_netdev_notifier = {
 
 /*--------------------------------- DebugFS ---------------------------------*/
 static struct dentry *debugfs_dir = 0;
-ssize_t debugfs_get_slave(struct file *file, char __user *buff, size_t count, loff_t *offset)
+static ssize_t debugfs_get_slave(struct file *file, char __user *buff, size_t count, loff_t *offset)
 {
-    copy_to_user(buff, DRV_NAME, strlen(DRV_NAME));
-    return strlen(DRV_NAME);
+    return simple_read_from_buffer(buff, count, offset, DRV_NAME, strlen(DRV_NAME));
 }
-ssize_t debugfs_set_slave(struct file *file, const char __user *buff, size_t count, loff_t *offset)
+static ssize_t debugfs_set_slave(struct file *file, const char __user *buff, size_t count, loff_t *offset)
 {
     char interface[IFNAMSIZ+1];
-    size_t buff_len = strlen_user(buff);
-    if (buff_len > sizeof interface)
-        return -EINVAL;
+    ssize_t nulpos;
+    ssize_t ret = simple_write_to_buffer(interface, sizeof interface - 1, offset, buff, count);
+    if (ret <= 0)
+        return ret;
 
-    copy_from_user(interface, buff, buff_len);
-    interface[buff_len] = '\0';
+    nulpos = ret;
+    if (interface[ret-1] == '\n')
+        nulpos--;
 
-    printk(DRV_NAME ": You wanna enslave %s?\n", interface);
+    interface[nulpos] = '\0';
 
-    return 0;
+    printk(DRV_NAME ": You want to enslave '%s'?\n", interface);
+
+    return ret;
 }
 static const struct file_operations slave_fops = {
     .owner = THIS_MODULE,
@@ -901,7 +904,7 @@ static void uman_setup(struct net_device *uman_dev)
 
 static int __init uman_init_module(void)
 {
-    int ret, result;
+    int ret;
     struct net_device *uman_dev;
     struct dentry *dentry;
     VERBOSE_LOG_FUNENTRY();
@@ -914,8 +917,8 @@ static int __init uman_init_module(void)
     if (!uman_dev)
         return -ENOMEM;
 
-    if ((result = register_netdev(uman_dev))) {
-        printk("uman: error %i registering device \"%s\"\n", result, uman_dev->name);
+    if ((ret = register_netdev(uman_dev))) {
+        printk("uman: error %i registering device \"%s\"\n", ret, uman_dev->name);
         return -ENODEV;
     }
 
@@ -929,7 +932,7 @@ static int __init uman_init_module(void)
         }
     }
 
-
+    printk(DRV_NAME ": Initialized module\n");
     return 0;
 }
 
@@ -938,6 +941,7 @@ static void __exit uman_exit_module(void)
     VERBOSE_LOG_FUNENTRY();
     debugfs_remove_recursive(debugfs_dir);
     unregister_netdevice_notifier(&uman_netdev_notifier);
+    printk(DRV_NAME ": Exiting module\n");
 }
 
 
