@@ -795,24 +795,40 @@ static struct notifier_block uman_netdev_notifier = {
 static struct dentry *debugfs_dir = 0;
 static ssize_t debugfs_get_slave(struct file *file, char __user *buff, size_t count, loff_t *offset)
 {
-    return simple_read_from_buffer(buff, count, offset, DRV_NAME, strlen(DRV_NAME));
+    struct net_device *uman_dev = file->f_inode->i_private;
+    struct uman *uman = netdev_priv(uman_dev);
+    struct slave *slave = uman_slave(uman);
+
+    if (!slave)
+        return 0;
+
+    return simple_read_from_buffer(buff, count, offset, slave->dev->name, strlen(slave->dev->name));
 }
 static ssize_t debugfs_set_slave(struct file *file, const char __user *buff, size_t count, loff_t *offset)
 {
     struct net_device *uman_dev = file->f_inode->i_private;
-    char interface[IFNAMSIZ+1];
+    struct uman *uman = netdev_priv(uman_dev);
+    struct net_device *slave_dev;
+    char ifname[IFNAMSIZ+1];
     ssize_t nulpos;
-    ssize_t ret = simple_write_to_buffer(interface, sizeof interface - 1, offset, buff, count);
+    ssize_t ret = simple_write_to_buffer(ifname, sizeof ifname - 1, offset, buff, count);
     if (ret <= 0)
         return ret;
 
     nulpos = ret;
-    if (interface[ret-1] == '\n')
+    if (ifname[ret-1] == '\n')
         nulpos--;
 
-    interface[nulpos] = '\0';
+    ifname[nulpos] = '\0';
 
-    printk(DRV_NAME ": (%p) You want to enslave '%s'?\n", uman_dev, interface);
+    slave_dev = dev_get_by_name(&init_net, ifname);
+
+    if (!slave_dev)
+        return -EINVAL;
+
+    printk(DRV_NAME ": (%p) You want to enslave %s@%p (%s)?\n", uman_dev, ifname, slave_dev, slave_dev->name);
+
+    uman->slave.dev = slave_dev;
 
     return ret;
 }
