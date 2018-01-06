@@ -799,7 +799,7 @@ static ssize_t debugfs_get_slave(struct file *file, char __user *buff, size_t co
     struct uman *uman = netdev_priv(uman_dev);
     struct slave *slave = uman_slave(uman);
 
-    if (IS_ERR_OR_NULL(debugfs_dir))
+    if (!debugfs_dir)
         return -EIO;
 
     if (!slave)
@@ -815,7 +815,7 @@ static ssize_t debugfs_set_slave(struct file *file, const char __user *buff, siz
     ssize_t ret, nulpos;
     int result;
 
-    if (IS_ERR_OR_NULL(debugfs_dir))
+    if (!debugfs_dir)
         return -EIO;
 
     ret = simple_write_to_buffer(ifname, sizeof ifname - 1, offset, buff, count);
@@ -935,7 +935,7 @@ static void uman_setup(struct net_device *uman_dev)
 static void __exit uman_exit_module(void)
 {
     VERBOSE_LOG_FUNENTRY();
-    if (!IS_ERR_OR_NULL(debugfs_dir))
+    if (debugfs_dir)
         debugfs_remove_recursive(debugfs_dir);
     unregister_netdevice_notifier(&uman_netdev_notifier);
     printk(DRV_NAME ": Exiting module\n");
@@ -945,7 +945,6 @@ static int __init uman_init_module(void)
 {
     int ret;
     struct net_device *uman_dev;
-    struct dentry *dentry;
     VERBOSE_LOG_FUNENTRY();
 
     register_netdevice_notifier(&uman_netdev_notifier);
@@ -964,8 +963,9 @@ static int __init uman_init_module(void)
     debugfs_dir = debugfs_create_dir(uman_dev->name, NULL);
     if (IS_ERR_OR_NULL(debugfs_dir)) {
         printk(KERN_ALERT DRV_NAME ": failed to create /sys/kernel/debug/%s\n", uman_dev->name);
+        debugfs_dir = NULL;
     } else {
-        dentry = debugfs_create_file("slave", 0600, debugfs_dir, uman_dev, &slave_fops);
+        struct dentry *dentry = debugfs_create_file("slave", 0600, debugfs_dir, uman_dev, &slave_fops);
         if (IS_ERR_OR_NULL(dentry)) {
             printk(KERN_ALERT DRV_NAME ": failed to create /sys/kernel/debug/%s/slave\n", uman_dev->name);
         }
