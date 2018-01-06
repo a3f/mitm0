@@ -799,6 +799,7 @@ static ssize_t debugfs_get_slave(struct file *file, char __user *buff, size_t co
 }
 static ssize_t debugfs_set_slave(struct file *file, const char __user *buff, size_t count, loff_t *offset)
 {
+    struct net_device *uman_dev = file->f_inode->i_private;
     char interface[IFNAMSIZ+1];
     ssize_t nulpos;
     ssize_t ret = simple_write_to_buffer(interface, sizeof interface - 1, offset, buff, count);
@@ -811,7 +812,7 @@ static ssize_t debugfs_set_slave(struct file *file, const char __user *buff, siz
 
     interface[nulpos] = '\0';
 
-    printk(DRV_NAME ": You want to enslave '%s'?\n", interface);
+    printk(DRV_NAME ": (%p) You want to enslave '%s'?\n", uman_dev, interface);
 
     return ret;
 }
@@ -926,13 +927,13 @@ static int __init uman_init_module(void)
     if (IS_ERR_OR_NULL(debugfs_dir)) {
         printk(KERN_ALERT DRV_NAME ": failed to create /sys/kernel/debug/%s\n", uman_dev->name);
     } else {
-        dentry = debugfs_create_file("slave", 0222, debugfs_dir, NULL, &slave_fops);
+        dentry = debugfs_create_file("slave", 0600, debugfs_dir, uman_dev, &slave_fops);
         if (IS_ERR_OR_NULL(dentry)) {
             printk(KERN_ALERT DRV_NAME ": failed to create /sys/kernel/debug/%s/slave\n", uman_dev->name);
         }
     }
 
-    printk(DRV_NAME ": Initialized module\n");
+    printk(DRV_NAME ": Initialized module with interface %s@%p\n", uman_dev->name, uman_dev);
     return 0;
 }
 
