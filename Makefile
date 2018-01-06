@@ -13,6 +13,9 @@ insmod:
 	sudo insmod $(obj-m:.o=.ko)
 rmmod:
 	sudo rmmod $(obj-m:.o=)
+probe:
+	@lsmod | grep $(obj-m:.o=) || echo Module not loaded.
+
 enslave:
 	sudo sh -c 'printf $(SLAVE_IF) > /sys/kernel/debug/uman0/slave'
 get_slave:
