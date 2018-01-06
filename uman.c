@@ -821,7 +821,9 @@ static ssize_t debugfs_set_slave(struct file *file, const char __user *buff, siz
 
     ifname[nulpos] = '\0';
 
-    slave_dev = dev_get_by_name(&init_net, ifname);
+    rtnl_lock();
+
+    slave_dev = __dev_get_by_name(&init_net, ifname);
 
     if (!slave_dev)
         return -EINVAL;
@@ -829,7 +831,9 @@ static ssize_t debugfs_set_slave(struct file *file, const char __user *buff, siz
     printk(DRV_NAME ": (%p) You want to enslave %s@%p (%s)?\n", uman_dev, ifname, slave_dev, slave_dev->name);
 
     if ((result = uman_enslave(uman_dev, slave_dev)))
-        return result;
+        ret = result;
+
+    rtnl_unlock();
 
     return ret;
 }
@@ -929,11 +933,11 @@ static int __init uman_init_module(void)
 
     register_netdevice_notifier(&uman_netdev_notifier);
 
-    /* Allocate the devices */
     uman_dev = alloc_netdev(sizeof(struct uman), "uman%d", NET_NAME_UNKNOWN, uman_setup);
 
-    if (!uman_dev)
+    if (!uman_dev) {
         return -ENOMEM;
+    }
 
     if ((ret = register_netdev(uman_dev))) {
         printk("uman: error %i registering device \"%s\"\n", ret, uman_dev->name);
