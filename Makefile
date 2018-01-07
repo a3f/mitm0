@@ -20,7 +20,10 @@ probe:
 slave_up:
 	sudo ifconfig $(SLAVE_IF) up
 	sudo dhclient $(SLAVE_IF)
-	nc -l $(shell ifconfig $(SLAVE_IF) | grep "inet " | awk -F'[: ]+' '{ print $$4 }') 1337
+	nc -l $(shell ifconfig uman0 | grep "inet " | awk -F'[: ]+' '{ print $$4 }') 1337
+
+nc:
+	nc -l $(shell ifconfig uman0 | grep "inet " | awk -F'[: ]+' '{ print $$4 }') 1337
 
 slave_down:
 	sudo ifconfig $(SLAVE_IF) down

@@ -85,27 +85,6 @@ static rx_handler_result_t uman_handle_frame(struct sk_buff **pskb)
 
 /*----------------------------------- Tx ------------------------------------*/
 
-/**
- * uman_dev_queue_xmit - Prepare skb for xmit.
- *
- * @uman: uman device that got this skb for tx.
- * @skb: skb to transmit
- */
-static inline int uman_dev_queue_xmit(struct slave *slave, struct sk_buff *skb)
-{
-    BUILD_BUG_ON(sizeof(skb->queue_mapping) !=
-             sizeof(qdisc_skb_cb(skb)->slave_dev_queue_mapping));
-    skb_set_queue_mapping(skb, qdisc_skb_cb(skb)->slave_dev_queue_mapping);
-    VERBOSE_LOG_FUNENTRY();
-
-    skb->dev = slave->dev;
-
-    return dev_queue_xmit(skb);
-}
-
-/*
- * Transmit a packet (called by the kernel)
- */
 static netdev_tx_t uman_start_xmit(struct sk_buff *skb, struct net_device *dev)
 {
     netdev_tx_t ret = NETDEV_TX_OK;
@@ -113,10 +92,15 @@ static netdev_tx_t uman_start_xmit(struct sk_buff *skb, struct net_device *dev)
     struct slave *slave = uman_slave(uman);
     VERBOSE_LOG_FUNENTRY();
 
+    BUILD_BUG_ON(sizeof(skb->queue_mapping) !=
+             sizeof(qdisc_skb_cb(skb)->slave_dev_queue_mapping));
+    skb_set_queue_mapping(skb, qdisc_skb_cb(skb)->slave_dev_queue_mapping);
+
     /* TODO rcu lock? */
-    if (slave)
-        ret = uman_dev_queue_xmit(slave, skb);
-    else {
+    if (slave) {
+        skb->dev = slave->dev;
+        ret = dev_queue_xmit(skb);
+    } else {
         atomic_long_inc(&dev->tx_dropped);
         dev_kfree_skb_any(skb);
     }
