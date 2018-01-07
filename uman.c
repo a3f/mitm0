@@ -31,7 +31,8 @@ int verbose = 1; /* FIXME wasn't there a more idiomatic way? */
 module_param(verbose, int, 0);
 MODULE_PARM_DESC(verbose, "0 != 1, 1 = narrate every function call");
 
-#define VERBOSE_LOG(...) do { if (verbose) printk(DRV_NAME ": " __VA_ARGS__); } while (0)
+#define VERBOSE_LOG(...) do{ if (verbose) printk(DRV_NAME ": " __VA_ARGS__);} \
+				while (0)
 #define VERBOSE_LOG_FUNENTRY() VERBOSE_LOG("%s()", __func__)
 
 
@@ -50,8 +51,8 @@ struct uman {
 
 #define uman_slave_list(uman) (&(uman)->dev->adj_list.lower)
 #define uman_has_slave(uman) !list_empty(uman_slave_list(uman))
-#define uman_slave(uman) \
-    (uman_has_slave(uman) ? netdev_adjacent_get_private(uman_slave_list(uman)->next) : NULL)
+#define uman_slave(uman) (uman_has_slave(uman) ? \
+	netdev_adjacent_get_private(uman_slave_list(uman)->next) : NULL)
 #define uman_of(slaveptr) container_of((slaveptr), struct uman, slave)
 
 
@@ -110,7 +111,8 @@ void uman_setup(struct net_device *uman_dev)
 
 /*--------------------------------- DebugFS ---------------------------------*/
 static struct dentry *debugfs_dir;
-static ssize_t debugfs_get_slave(struct file *file, char __user *buff, size_t count, loff_t *offset)
+static ssize_t debugfs_get_slave(struct file *file, char __user *buff,
+	size_t count, loff_t *offset)
 {
     struct net_device *uman_dev = file->f_inode->i_private;
     struct uman *uman = netdev_priv(uman_dev);
@@ -123,9 +125,11 @@ static ssize_t debugfs_get_slave(struct file *file, char __user *buff, size_t co
     if (!slave)
         return -EAGAIN;
 
-    return simple_read_from_buffer(buff, count, offset, slave->dev->name, strlen(slave->dev->name));
+    return simple_read_from_buffer(buff, count, offset, slave->dev->name,
+	    strlen(slave->dev->name));
 }
-static ssize_t debugfs_set_slave(struct file *file, const char __user *buff, size_t count, loff_t *offset)
+static ssize_t debugfs_set_slave(struct file *file, const char __user *buff,
+size_t count, loff_t *offset)
 {
     struct net_device *uman_dev = file->f_inode->i_private;
     struct net_device *slave_dev;
@@ -137,7 +141,7 @@ static ssize_t debugfs_set_slave(struct file *file, const char __user *buff, siz
     if (!debugfs_dir)
         return -EIO;
 
-    ret = simple_write_to_buffer(ifname, sizeof ifname - 1, offset, buff, count);
+    ret = simple_write_to_buffer(ifname, sizeof ifname-1, offset, buff, count);
     if (ret <= 0)
         return ret;
 
@@ -154,7 +158,8 @@ static ssize_t debugfs_set_slave(struct file *file, const char __user *buff, siz
     if (!slave_dev)
         return -EINVAL;
 
-    printk(DRV_NAME ": (%p) You want to enslave %s@%p (%s)?\n", uman_dev, ifname, slave_dev, slave_dev->name);
+    printk(DRV_NAME ": (%p) You want to enslave %s@%p (%s)?\n", uman_dev,
+	    ifname, slave_dev, slave_dev->name);
 
 #if 0
     if ((result = uman_enslave(uman_dev, slave_dev)))
@@ -180,13 +185,13 @@ int __init uman_init_module(void)
 	VERBOSE_LOG_FUNENTRY();
 
 	/* Allocate the devices */
-	uman_dev = alloc_netdev(sizeof(struct uman), "sn%d", NET_NAME_UNKNOWN,
-			uman_setup);
+	uman_dev = alloc_netdev(sizeof(struct uman), "uman%d",
+		NET_NAME_UNKNOWN, uman_setup);
 	if (!uman_dev)
 		return -ENOMEM;
 
 	if ((ret = register_netdev(uman_dev))) {
-		printk("snull: error %i registering device \"%s\"\n",
+		printk(DRV_NAME ": error %i registering device \"%s\"\n",
 				ret, uman_dev->name);
 		unregister_netdev(uman_dev);
 		return -ENODEV;
@@ -194,12 +199,15 @@ int __init uman_init_module(void)
 
 	debugfs_dir = debugfs_create_dir(uman_dev->name, NULL);
 	if (IS_ERR_OR_NULL(debugfs_dir)) {
-		printk(KERN_ALERT DRV_NAME ": failed to create /sys/kernel/debug/%s\n", uman_dev->name);
+		printk(KERN_ALERT DRV_NAME ": failed to create /sys/kernel/debug/%s\n",
+            uman_dev->name);
 		debugfs_dir = NULL;
 	} else {
-		struct dentry *dentry = debugfs_create_file("slave", 0600, debugfs_dir, uman_dev, &slave_fops);
+		struct dentry *dentry = debugfs_create_file("slave", 0600, debugfs_dir,
+            uman_dev, &slave_fops);
 		if (IS_ERR_OR_NULL(dentry)) {
-			printk(KERN_ALERT DRV_NAME ": failed to create /sys/kernel/debug/%s/slave\n", uman_dev->name);
+			printk(KERN_ALERT DRV_NAME ": failed to create /sys/kernel/debug/%s/slave\n",
+            uman_dev->name);
 		}
 	}
 

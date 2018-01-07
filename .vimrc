@@ -7,3 +7,4 @@ set shiftwidth=8
 set noexpandtab
 set list listchars=tab:»\ ,trail:.,extends:»,precedes:«
 set ai
+set colorcolumn=80
