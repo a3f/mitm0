@@ -36,7 +36,7 @@ MODULE_PARM_DESC(default_slave, "Default slave interface");
 
 int verbose = 1; /* FIXME wasn't there a more idiomatic way? */
 /* I think /usr/src/linux/Documentation/dynamic-debug-howto.txt */
-module_param(verbose, int, 1);
+module_param(verbose, int, 0);
 MODULE_PARM_DESC(verbose, "0 != 1, 1 = narrate every function call");
 
 #define VERBOSE_LOG(...) do { if (verbose) printk(DRV_NAME ": " __VA_ARGS__); } while (0)
