@@ -527,7 +527,7 @@ static int uman_emancipate_and_destroy(struct net_device *uman_dev, struct net_d
     VERBOSE_LOG_FUNENTRY();
 
     ret = uman_emancipate(uman_dev, slave_dev);
-    if (ret == 0 && !uman_has_slave(uman)) { /* TODO second cond should be unnecessary */ 
+    if (ret == 0 && !uman_has_slave(uman)) { /* TODO second cond should be unnecessary */
         uman_dev->priv_flags |= IFF_DISABLE_NETPOLL;
         netdev_info(uman_dev, "Destroying bond %s\n", uman_dev->name);
         unregister_netdevice(uman_dev);
