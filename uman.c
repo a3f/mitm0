@@ -347,6 +347,9 @@ static int uman_emancipate(struct net_device *uman_dev, struct net_device *slave
     int old_flags = uman_dev->flags;
     VERBOSE_LOG_FUNENTRY();
 
+    if (!slave_dev)
+        slave_dev = uman->slave.dev;
+
     /* slave is not a slave or master is not master of this slave */
     if (!(slave_dev->flags & IFF_SLAVE) || !netdev_has_upper_dev(slave_dev, uman_dev)) {
         netdev_dbg(uman_dev, "cannot release %s\n", slave_dev->name);
@@ -395,9 +398,7 @@ static int uman_emancipate(struct net_device *uman_dev, struct net_device *slave
 
 void uman_abolish(struct net_device *uman_dev)
 {
-	struct uman *uman = netdev_priv(uman_dev);
-	if (uman->slave.dev)
-		uman_emancipate(uman_dev, uman->slave.dev);
+    uman_emancipate(uman_dev, NULL);
 	free_netdev(uman_dev);
 }
 
@@ -502,7 +503,7 @@ size_t count, loff_t *offset)
 	    if ((result = uman_enslave(uman_dev, slave_dev)))
 		ret = result;
     } else {
-	    if ((result = uman_emancipate(uman_dev, slave_dev)))
+	    if ((result = uman_emancipate(uman_dev, NULL)))
 		ret = result;
     }
 
@@ -561,6 +562,8 @@ int __init uman_init_module(void)
 void __exit uman_exit_module(void)
 {
 	VERBOSE_LOG_FUNENTRY();
+    if (debugfs_dir)
+        debugfs_remove_recursive(debugfs_dir);
 	unregister_netdev(uman_dev);
 	printk(DRV_NAME ": Exiting module\n");
 }
