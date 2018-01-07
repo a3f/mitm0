@@ -44,6 +44,7 @@ MODULE_PARM_DESC(verbose, "0 != 1, 1 = narrate every function call");
 
 struct uman {
     struct net_device *dev;
+    spinlock_t lock;
 
     struct slave {
         struct net_device *dev;
@@ -179,10 +180,14 @@ static void uman_set_dev_addr(struct net_device *uman_dev, struct net_device *sl
 
 static void uman_set_dev_mtu(struct net_device *uman_dev, struct net_device *slave_dev)
 {
+    unsigned long flags;
+    spinlock_t *lock = &uman_dev->lock;
     VERBOSE_LOG_FUNENTRY();
     netdev_dbg(uman_dev, "uman_dev=%p slave_dev=%p slave_dev->name=%s slave_dev->addr_len=%d\n",
            uman_dev, slave_dev, slave_dev->name, slave_dev->addr_len);
+    spin_lock_irqsave(lock, flags);
     uman_dev->mtu = slave_dev->mtu;
+    spin_unlock_irqrestore(lock, flags);
     call_netdevice_notifiers(NETDEV_CHANGEMTU, uman_dev);
 }
 
