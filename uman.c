@@ -237,8 +237,7 @@ static int uman_enslave(struct net_device *uman_dev,
 
     call_netdevice_notifiers(NETDEV_JOIN, slave_dev);
 
-    if (uman->dev->addr_assign_type == NET_ADDR_RANDOM)
-        uman_set_dev_addr(uman->dev, slave_dev);
+    uman_set_dev_addr(uman->dev, slave_dev);
 
     new_slave = &uman->slave;
     new_slave->dev = slave_dev;

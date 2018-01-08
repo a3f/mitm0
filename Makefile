@@ -34,6 +34,8 @@ release:
 	sudo sh -c 'echo > /sys/kernel/debug/uman0/slave'
 get_slave:
 	sudo cat /sys/kernel/debug/uman0/slave
+flush_slave_ip:
+	sudo ip addr flush dev $(SLAVE_IF)
 
 dmesg:
 	dmesg -wH
