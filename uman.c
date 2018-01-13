@@ -111,7 +111,7 @@ static netdev_tx_t uman_start_xmit(struct sk_buff *skb, struct net_device *dev)
 
 /*-------------------------- Bonding Notification ---------------------------*/
 
-static int uman_master_upper_dev_link(struct uman *uman, struct slave *slave)
+static int uman_master_upper_dev_link(struct uman *uman, struct net_device *slave_dev)
 {
     int err;
     /* we aggregate everything into one link, so that's technically a broadcast */
@@ -120,19 +120,19 @@ static int uman_master_upper_dev_link(struct uman *uman, struct slave *slave)
     };
     VERBOSE_LOG_FUNENTRY();
 
-    err = netdev_master_upper_dev_link(slave->dev, uman->dev, slave, &lag_upper_info);
+    err = netdev_master_upper_dev_link(slave_dev, uman->dev, slave_dev, &lag_upper_info);
     if (err)
         return err;
-    rtmsg_ifinfo(RTM_NEWLINK, slave->dev, IFF_SLAVE, GFP_KERNEL);
+    rtmsg_ifinfo(RTM_NEWLINK, slave_dev, IFF_SLAVE, GFP_KERNEL);
     return 0;
 }
 
-static void uman_upper_dev_unlink(struct uman *uman, struct slave *slave)
+static void uman_upper_dev_unlink(struct uman *uman, struct net_device *slave_dev)
 {
     VERBOSE_LOG_FUNENTRY();
-    netdev_upper_dev_unlink(slave->dev, uman->dev);
-    slave->dev->flags &= ~IFF_SLAVE;
-    rtmsg_ifinfo(RTM_NEWLINK, slave->dev, IFF_SLAVE, GFP_KERNEL);
+    netdev_upper_dev_unlink(slave_dev, uman->dev);
+    slave_dev->flags &= ~IFF_SLAVE;
+    rtmsg_ifinfo(RTM_NEWLINK, slave_dev, IFF_SLAVE, GFP_KERNEL);
 }
 /* FIXME unused */
 #if 0
@@ -197,7 +197,6 @@ static int uman_enslave(struct net_device *uman_dev,
 		struct net_device *slave_dev)
 {
     struct uman *uman = netdev_priv(uman_dev);
-    struct slave *new_slave = NULL;
     int res = 0;
     VERBOSE_LOG_FUNENTRY();
 
@@ -239,8 +238,7 @@ static int uman_enslave(struct net_device *uman_dev,
 
     uman_set_dev_addr(uman->dev, slave_dev);
 
-    new_slave = &uman->slave;
-    new_slave->dev = slave_dev;
+    uman->slave.dev = slave_dev;
 
     /* set slave flag before open to prevent IPv6 addrconf */
     slave_dev->flags |= IFF_SLAVE;
@@ -248,7 +246,7 @@ static int uman_enslave(struct net_device *uman_dev,
     /* open the slave since the application closed it */
     res = dev_open(slave_dev);
     if (res) {
-        netdev_dbg(uman_dev, "Opening slave %s failed\n", slave_dev->name);
+        netdev_err(uman_dev, "Opening slave %s failed\n", slave_dev->name);
         goto err_unslave;
     }
 
@@ -277,13 +275,13 @@ static int uman_enslave(struct net_device *uman_dev,
 
     res = netdev_rx_handler_register(slave_dev, uman_handle_frame, uman);
     if (res) {
-        netdev_dbg(uman_dev, "Error %d calling netdev_rx_handler_register\n", res);
+        netdev_err(uman_dev, "Error %d calling netdev_rx_handler_register\n", res);
         goto err_detach;
     }
 
-    res = uman_master_upper_dev_link(uman, new_slave);
+    res = uman_master_upper_dev_link(uman, slave_dev);
     if (res) {
-        netdev_dbg(uman_dev, "Error %d calling bond_master_upper_dev_link\n", res);
+        netdev_err(uman_dev, "Error %d calling bond_master_upper_dev_link\n", res);
         goto err_unregister;
     }
 
@@ -295,7 +293,7 @@ static int uman_enslave(struct net_device *uman_dev,
 
 /* Undo stages on error */
 err_unregister:
-    uman_upper_dev_unlink(uman, new_slave);
+    uman_upper_dev_unlink(uman, slave_dev);
     netdev_rx_handler_unregister(slave_dev);
 
 err_detach:
@@ -338,18 +336,18 @@ static int uman_emancipate(struct net_device *uman_dev, struct net_device *slave
 
     /* slave is not a slave or master is not master of this slave */
     if (!(slave_dev->flags & IFF_SLAVE) || !netdev_has_upper_dev(slave_dev, uman_dev)) {
-        netdev_dbg(uman_dev, "cannot release %s\n", slave_dev->name);
+        netdev_err(uman_dev, "cannot release %s\n", slave_dev->name);
         return -EINVAL;
     }
 
     slave = uman_slave(uman);
     if (!slave) {
         /* not a slave of this uman */
-        netdev_info(uman_dev, "%s not enslaved\n", slave_dev->name);
+        netdev_err(uman_dev, "%s not enslaved\n", slave_dev->name);
         return -EINVAL;
     }
 
-    uman_upper_dev_unlink(uman, slave);
+    uman_upper_dev_unlink(uman, slave_dev);
     /* unregister rx_handler early so uman_handle_frame wouldn't be called
      * for this slave anymore.
      */
