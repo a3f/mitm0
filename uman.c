@@ -6,10 +6,12 @@
  *   ip link add uman0 type bond
  *   ip link set eth1 master uman0
  */
+// FIXME remove
 
 #include <linux/module.h>
 #include <linux/init.h>
 #include <linux/moduleparam.h>
+#include <linux/types.h>
 #include <linux/debugfs.h>
 #include <linux/rtnetlink.h>
 
@@ -17,6 +19,7 @@
 #include <linux/kernel.h>
 #include <linux/errno.h>
 #include <linux/types.h>
+#include <linux/netpoll.h>
 
 #include <linux/netdevice.h>
 #include <linux/if_arp.h>
@@ -34,6 +37,20 @@ int verbose = 1; /* FIXME wasn't there a more idiomatic way? */
 module_param(verbose, int, 0);
 MODULE_PARM_DESC(verbose, "0 != 1, 1 = narrate every function call");
 
+
+static bool use_qdisc = false;
+module_param(use_qdisc, bool, 0);
+MODULE_PARM_DESC(use_qdisc, "Use Qdisc? 0 = no (default), 1 = yes");
+
+#ifdef CONFIG_NETPOLL
+static bool use_netpoll = true;
+MODULE_PARM_DESC(use_netpoll, "Use netpoll if possible? 0 = no, 1 = yes (default)");
+module_param(use_netpoll, bool, 0);
+#else
+static int use_netpoll = false;
+#endif
+
+
 #define VERBOSE_LOG(...) do{ if (verbose) printk(DRV_NAME ": " __VA_ARGS__);} \
 				while (0)
 #define VERBOSE_LOG_FUNENTRY() VERBOSE_LOG("%s()", __func__)
@@ -46,6 +63,11 @@ MODULE_PARM_DESC(verbose, "0 != 1, 1 = narrate every function call");
 struct uman {
 	struct net_device *dev;
 	spinlock_t lock;
+
+#ifdef CONFIG_NETPOLL
+        struct netpoll np;
+#endif
+        netdev_tx_t (*xmit)(struct uman *uman, struct sk_buff *);
 
 	struct slave {
 		struct net_device *dev;
@@ -85,6 +107,8 @@ static rx_handler_result_t uman_handle_frame(struct sk_buff **pskb)
 
 /*----------------------------------- Tx ------------------------------------*/
 
+static int __packet_direct_xmit(struct sk_buff *skb);
+
 static netdev_tx_t uman_start_xmit(struct sk_buff *skb, struct net_device *dev)
 {
     netdev_tx_t ret = NETDEV_TX_OK;
@@ -96,10 +120,15 @@ static netdev_tx_t uman_start_xmit(struct sk_buff *skb, struct net_device *dev)
              sizeof(qdisc_skb_cb(skb)->slave_dev_queue_mapping));
     skb_set_queue_mapping(skb, qdisc_skb_cb(skb)->slave_dev_queue_mapping);
 
+#if 0 /* we could use this for notification of tx if we are sure no one else uses it */
+    skb_shinfo(skb)->destructor_arg = pBuffer_p;
+    skb->destructor = txPacketHandler;
+#endif
+
     /* TODO rcu lock? */
     if (slave) {
         skb->dev = slave->dev;
-        ret = dev_queue_xmit(skb);
+        ret = uman->xmit(uman, skb);
     } else {
         atomic_long_inc(&dev->tx_dropped);
         dev_kfree_skb_any(skb);
@@ -107,6 +136,96 @@ static netdev_tx_t uman_start_xmit(struct sk_buff *skb, struct net_device *dev)
 
 
     return ret;
+}
+static inline netdev_tx_t __packet_xmit_irq_enabled(netdev_tx_t (*xmit)(struct sk_buff *), struct sk_buff *skb)
+{
+    netdev_tx_t ret;
+    bool enable_irq = irqs_disabled(); /* always false in our current setup, but your use case may change */
+
+    if (enable_irq) local_irq_enable();
+    ret = xmit(skb);
+    if (enable_irq) local_irq_disable();
+
+    return ret;
+}
+static netdev_tx_t packet_queue_xmit(struct uman *uman, struct sk_buff *skb)
+{
+    BUILD_BUG_ON(sizeof(skb->queue_mapping) !=
+            sizeof(qdisc_skb_cb(skb)->slave_dev_queue_mapping));
+    skb_set_queue_mapping(skb, qdisc_skb_cb(skb)->slave_dev_queue_mapping);
+
+    return __packet_xmit_irq_enabled(dev_queue_xmit, skb);
+}
+static netdev_tx_t packet_direct_xmit(struct uman *uman, struct sk_buff *skb)
+{
+    return __packet_xmit_irq_enabled(__packet_direct_xmit, skb);
+}
+static netdev_tx_t packet_netpoll_xmit(struct uman *uman, struct sk_buff *skb)
+{
+#ifdef CONFIG_NETPOLL
+    netpoll_send_skb(&uman->np, skb);
+#endif
+    return NETDEV_TX_OK;
+}
+
+/* Taken out of net/packet/af_packet.c */
+static u16 __packet_pick_tx_queue(struct net_device *dev, struct sk_buff *skb)
+{
+	return (u16) raw_smp_processor_id() % dev->real_num_tx_queues;
+}
+
+
+static void packet_pick_tx_queue(struct net_device *dev, struct sk_buff *skb)
+{
+	const struct net_device_ops *ops = dev->netdev_ops;
+	u16 queue_index;
+
+	if (ops->ndo_select_queue)
+        {
+		queue_index = ops->ndo_select_queue(dev, skb, NULL,
+						    __packet_pick_tx_queue);
+		queue_index = netdev_cap_txqueue(dev, queue_index);
+	} else {
+		queue_index = __packet_pick_tx_queue(dev, skb);
+	}
+
+	skb_set_queue_mapping(skb, queue_index);
+}
+static int __packet_direct_xmit(struct sk_buff *skb)
+{
+	struct net_device *dev = skb->dev;
+	struct sk_buff *orig_skb = skb;
+	struct netdev_queue *txq;
+	int ret = NETDEV_TX_BUSY;
+
+	if (unlikely(!netif_running(dev) ||
+		     !netif_carrier_ok(dev)))
+		goto drop;
+
+	skb = validate_xmit_skb_list(skb, dev);
+	if (skb != orig_skb)
+		goto drop;
+
+	packet_pick_tx_queue(dev, skb);
+	txq = skb_get_tx_queue(dev, skb);
+
+	local_bh_disable();
+
+	HARD_TX_LOCK(dev, txq, smp_processor_id());
+	if (!netif_xmit_frozen_or_drv_stopped(txq))
+		ret = netdev_start_xmit(skb, dev, txq, false);
+	HARD_TX_UNLOCK(dev, txq);
+
+	local_bh_enable();
+
+	if (!dev_xmit_complete(ret))
+		kfree_skb(skb);
+
+	return ret;
+drop:
+	atomic_long_inc(&dev->tx_dropped);
+	kfree_skb_list(skb);
+	return NET_XMIT_DROP;
 }
 
 /*-------------------------- Bonding Notification ---------------------------*/
@@ -422,7 +541,12 @@ void uman_setup(struct net_device *uman_dev)
 	ether_setup(uman_dev); /* assign some of the fields */
 
 	uman_dev->netdev_ops = &uman_netdev_ops;
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(4,11,9)
+        uman_dev->needs_free_netdev = true;
+#else
 	uman_dev->destructor = free_netdev;
+#endif
+
 }
 
 /*--------------------------------- DebugFS ---------------------------------*/
@@ -448,6 +572,7 @@ static ssize_t debugfs_set_slave(struct file *file, const char __user *buff,
 size_t count, loff_t *offset)
 {
     struct net_device *uman_dev = file->f_inode->i_private;
+    struct uman *uman = netdev_priv(uman_dev);
     struct net_device *slave_dev;
     char ifname[IFNAMSIZ+1];
     ssize_t ret, nulpos;
@@ -480,13 +605,46 @@ size_t count, loff_t *offset)
 
 	    if ((result = uman_enslave(uman_dev, slave_dev)))
 		ret = result;
+
+#ifdef CONFIG_NETPOLL
+        if (use_netpoll)
+        {
+            uman->np.name = "oplk-edrv-bridge";
+            strlcpy(uman->np.dev_name, slave_dev->name, IFNAMSIZ);
+            ret = __netpoll_setup(&uman->np, slave_dev);
+            if (ret < 0)
+            {
+                printk(KERN_ERR "%s() Failed to setup netpoll for %s: error %d\n", __func__, slave_dev, ret);
+                uman->np.dev = NULL;
+                goto unlock;
+            }
+        }
+#endif
+
+    uman->xmit = use_qdisc   ? packet_queue_xmit
+               : use_netpoll ? packet_netpoll_xmit
+               :               packet_direct_xmit;
+
+    printk("uman%s: %s mode will be used on %s\n", uman_dev->name,
+            use_qdisc   ? "Qdisc" :
+            use_netpoll ? "Netpoll" :
+                          "Direct-xmit",
+            slave_dev->name);
+
     } else {
+            uman->xmit = NULL; /* FIXME might be racy... */
+#ifdef CONFIG_NETPOLL
+            if (uman->np.dev) {
+                netpoll_cleanup(&uman->np);
+                uman->np.dev = NULL;
+            }
+#endif
 	    if ((result = uman_emancipate(uman_dev, NULL)))
 		ret = result;
     }
 
+unlock:
     rtnl_unlock();
-
     return ret;
 }
 static const struct file_operations slave_fops = {

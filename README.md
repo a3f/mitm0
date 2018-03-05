@@ -2,7 +2,7 @@
 
 A concise example of how a NDIS intermediate-like driver on Linux may be implemented. All net device operations are forwarded to the micromanaged network driver. Incoming packets also first enter μman before they are passed to the networking stack.
 
-μman does so by using the bonding driver API to claim a single network interface completely for itself.
+μman does so by uses the same mechanisms as the Linux switching API to control a single network interface.
 
 ## How to use
 
