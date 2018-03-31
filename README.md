@@ -6,11 +6,11 @@ A concise example of how a NDIS intermediate-like driver on Linux may be impleme
 
 ## How to use
 
-some `ifenslave` stuff here
+You can read/write `/sys/kernel/debug/uman0/slave` to set the slave interface (`echo > /sys/kernel/debug/uman0/slave` to free slave). I experiences some rather high latency outliers with netpoll, so you should probably set `use_qdisc=1 use_netpoll=0` at module load time.
 
 ## Why not use pcap?
 
-Good question. Do measurements and post them here.
+pcap does passic sniffing. This intercepts all traffic.
 
 ## Copyright and License
 
