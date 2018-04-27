@@ -1,12 +1,7 @@
 /*
  * uman.c  --  the network driver micro-manager
  * Copyright (C) 2017 Ahmad Fatoum
- *
- * Example (micromanage eth1 through uman0):
- *   ip link add uman0 type bond
- *   ip link set eth1 master uman0
  */
-// FIXME remove
 
 #include <linux/module.h>
 #include <linux/init.h>
@@ -32,12 +27,6 @@
 #define DRV_NAME        "uman"
 #define DRV_DESCRIPTION        "Network driver micro-manager"
 
-int verbose = 1; /* FIXME wasn't there a more idiomatic way? */
-/* I think /usr/src/linux/Documentation/dynamic-debug-howto.txt */
-module_param(verbose, int, 0);
-MODULE_PARM_DESC(verbose, "0 != 1, 1 = narrate every function call");
-
-
 static bool use_qdisc = false;
 module_param(use_qdisc, bool, 0);
 MODULE_PARM_DESC(use_qdisc, "Use Qdisc? 0 = no (default), 1 = yes");
@@ -49,11 +38,6 @@ module_param(use_netpoll, bool, 0);
 #else
 static int use_netpoll = false;
 #endif
-
-
-#define VERBOSE_LOG(...) do{ if (verbose) printk(DRV_NAME ": " __VA_ARGS__);} \
-				while (0)
-#define VERBOSE_LOG_FUNENTRY() VERBOSE_LOG("%s()", __func__)
 
 
 /*
@@ -89,7 +73,6 @@ static rx_handler_result_t uman_handle_frame(struct sk_buff **pskb)
 {
     struct sk_buff *skb = *pskb;
     struct uman *uman;
-    VERBOSE_LOG_FUNENTRY();
 
     skb = skb_share_check(skb, GFP_ATOMIC);
     if (unlikely(!skb))
@@ -114,7 +97,6 @@ static netdev_tx_t uman_start_xmit(struct sk_buff *skb, struct net_device *dev)
     netdev_tx_t ret = NETDEV_TX_OK;
     struct uman *uman = netdev_priv(dev);
     struct slave *slave = uman_slave(uman);
-    VERBOSE_LOG_FUNENTRY();
 
     BUILD_BUG_ON(sizeof(skb->queue_mapping) !=
              sizeof(qdisc_skb_cb(skb)->slave_dev_queue_mapping));
@@ -237,7 +219,6 @@ static int uman_master_upper_dev_link(struct uman *uman, struct net_device *slav
     struct netdev_lag_upper_info lag_upper_info = {
         .tx_type = NETDEV_LAG_TX_TYPE_BROADCAST
     };
-    VERBOSE_LOG_FUNENTRY();
 
     err = netdev_master_upper_dev_link(slave_dev, uman->dev, slave_dev, &lag_upper_info);
     if (err)
@@ -248,7 +229,6 @@ static int uman_master_upper_dev_link(struct uman *uman, struct net_device *slav
 
 static void uman_upper_dev_unlink(struct uman *uman, struct net_device *slave_dev)
 {
-    VERBOSE_LOG_FUNENTRY();
     netdev_upper_dev_unlink(slave_dev, uman->dev);
     slave_dev->flags &= ~IFF_SLAVE;
     rtmsg_ifinfo(RTM_NEWLINK, slave_dev, IFF_SLAVE, GFP_KERNEL);
@@ -258,7 +238,6 @@ static void uman_upper_dev_unlink(struct uman *uman, struct net_device *slave_de
 static void bond_lower_state_changed(struct slave *slave)
 {
     struct netdev_lag_lower_state_info info;
-    VERBOSE_LOG_FUNENTRY();
 
     info.link_up = slave->link_up;
     info.tx_enabled = slave->dev != NULL;
@@ -275,7 +254,6 @@ static void bond_lower_state_changed(struct slave *slave)
  */
 static void uman_set_dev_addr(struct net_device *uman_dev, struct net_device *slave_dev)
 {
-    VERBOSE_LOG_FUNENTRY();
     netdev_dbg(uman_dev, "uman_dev=%p slave_dev=%p slave_dev->name=%s slave_dev->addr_len=%d\n",
            uman_dev, slave_dev, slave_dev->name, slave_dev->addr_len);
     memcpy(uman_dev->dev_addr, slave_dev->dev_addr, slave_dev->addr_len);
@@ -291,7 +269,6 @@ static void uman_set_dev_addr(struct net_device *uman_dev, struct net_device *sl
 static int uman_set_carrier(struct uman *uman)
 {
     struct slave *slave = uman_slave(uman);
-    VERBOSE_LOG_FUNENTRY();
 
     if (!slave)
         goto down;
@@ -317,7 +294,6 @@ static int uman_enslave(struct net_device *uman_dev,
 {
     struct uman *uman = netdev_priv(uman_dev);
     int res = 0;
-    VERBOSE_LOG_FUNENTRY();
 
     /* We only micromanage one device */
     if (uman_has_slave(uman)) {
@@ -445,7 +421,6 @@ static int uman_emancipate(struct net_device *uman_dev, struct net_device *slave
     struct uman *uman = netdev_priv(uman_dev);
     struct slave *slave;
     int old_flags = uman_dev->flags;
-    VERBOSE_LOG_FUNENTRY();
 
     if (!slave_dev)
         slave_dev = uman->slave.dev;
@@ -506,7 +481,6 @@ static int uman_emancipate(struct net_device *uman_dev, struct net_device *slave
  */
 int uman_open(struct net_device *dev)
 {
-	VERBOSE_LOG_FUNENTRY();
 	/* Neither bond not team call netif_(start|stop)_queue. why? */
 	/* netif_start_queue(dev); */
 	return 0;
@@ -514,7 +488,6 @@ int uman_open(struct net_device *dev)
 
 int uman_stop(struct net_device *dev)
 {
-	VERBOSE_LOG_FUNENTRY();
 	/* netif_stop_queue(dev); */
 	return 0;
 }
@@ -532,7 +505,6 @@ static const struct net_device_ops uman_netdev_ops = {
 void uman_setup(struct net_device *uman_dev)
 {
 	struct uman *uman = netdev_priv(uman_dev);
-	VERBOSE_LOG_FUNENTRY();
 
 	spin_lock_init(&uman->lock);
 	uman->dev = uman_dev;
@@ -557,7 +529,6 @@ static ssize_t debugfs_get_slave(struct file *file, char __user *buff,
     struct net_device *uman_dev = file->f_inode->i_private;
     struct uman *uman = netdev_priv(uman_dev);
     struct slave *slave = uman_slave(uman);
-    VERBOSE_LOG_FUNENTRY();
 
     if (!debugfs_dir)
         return -EIO;
@@ -577,7 +548,6 @@ size_t count, loff_t *offset)
     char ifname[IFNAMSIZ+1];
     ssize_t ret, nulpos;
     int result;
-    VERBOSE_LOG_FUNENTRY();
 
     if (!debugfs_dir)
         return -EIO;
@@ -661,7 +631,6 @@ static struct net_device *uman_dev;
 int __init uman_init_module(void)
 {
 	int ret;
-	VERBOSE_LOG_FUNENTRY();
 
 	/* Allocate the devices */
 	uman_dev = alloc_netdev(sizeof(struct uman), "uman%d",
@@ -697,7 +666,6 @@ int __init uman_init_module(void)
 
 void __exit uman_exit_module(void)
 {
-	VERBOSE_LOG_FUNENTRY();
     if (debugfs_dir)
         debugfs_remove_recursive(debugfs_dir);
     rtnl_lock();
