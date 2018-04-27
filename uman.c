@@ -1,6 +1,10 @@
 /*
  * uman.c  --  the network driver micro-manager
  * Copyright (C) 2017 Ahmad Fatoum
+ *
+ * Based on the drivers/net/bonding/bond_main.c
+ * Copyright 1999, Thomas Davis, tadavis@lbl.gov.
+ * Licensed under the GPL. Itself based on dummy.c, and eql.c devices.
  */
 
 #include <linux/module.h>
