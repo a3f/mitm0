@@ -26,8 +26,8 @@
 #include <linux/etherdevice.h>
 #include <linux/skbuff.h>
 
-#define DRV_VERSION        "0.01"
-#define DRV_RELDATE        "2017-01-01"
+#define DRV_VERSION        "0.02"
+#define DRV_RELDATE        "2018-04-27"
 #define DRV_NAME           "mitm"
 #define DRV_DESCRIPTION    "Network driver Man-In-The-Middle'r"
 
