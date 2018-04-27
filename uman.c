@@ -265,8 +265,7 @@ static void uman_set_dev_addr(struct net_device *uman_dev, struct net_device *sl
     call_netdevice_notifiers(NETDEV_CHANGEADDR, uman_dev);
 }
 
-/* Set the carrier state for the master according to the state of its
- * slaves.
+/* Set carrier state of master on if there's a slave
  *
  * Returns zero if carrier state does not change, nonzero if it does.
  */
@@ -274,19 +273,20 @@ static int uman_set_carrier(struct uman *uman)
 {
     struct slave *slave = uman_slave(uman);
 
-    if (!slave)
-        goto down;
+    if (!slave) {
+	if (netif_carrier_ok(uman->dev)) {
+	    netif_carrier_off(uman->dev);
+	    return 1;
+	}
+
+	return 0;
+    }
 
     if (!netif_carrier_ok(uman->dev)) {
         netif_carrier_on(uman->dev);
         return 1;
     }
 
-down:
-    if (netif_carrier_ok(uman->dev)) {
-        netif_carrier_off(uman->dev);
-        return 1;
-    }
     return 0;
 }
 
