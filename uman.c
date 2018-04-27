@@ -614,7 +614,7 @@ size_t count, loff_t *offset)
             ret = __netpoll_setup(&uman->np, slave_dev);
             if (ret < 0)
             {
-                printk(KERN_ERR "%s() Failed to setup netpoll for %s: error %d\n", __func__, slave_dev, ret);
+                printk(KERN_ERR "%s() Failed to setup netpoll for %s: error %zd\n", __func__, slave_dev->name, ret);
                 uman->np.dev = NULL;
                 goto unlock;
             }
