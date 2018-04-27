@@ -31,16 +31,14 @@
 #define DRV_NAME        "uman"
 #define DRV_DESCRIPTION        "Network driver micro-manager"
 
-static bool use_qdisc = false;
+static bool use_qdisc = true;
 module_param(use_qdisc, bool, 0);
-MODULE_PARM_DESC(use_qdisc, "Use Qdisc? 0 = no (default), 1 = yes");
+MODULE_PARM_DESC(use_qdisc, "Use Qdisc? 0 = no, 1 = yes (default)");
 
+static bool use_netpoll = false;
 #ifdef CONFIG_NETPOLL
-static bool use_netpoll = true;
-MODULE_PARM_DESC(use_netpoll, "Use netpoll if possible? 0 = no, 1 = yes (default)");
+MODULE_PARM_DESC(use_netpoll, "Use netpoll if possible? 0 = no (default), 1 = yes");
 module_param(use_netpoll, bool, 0);
-#else
-static int use_netpoll = false;
 #endif
 
 
