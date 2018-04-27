@@ -1,8 +1,8 @@
-# mitm0: Man-in-the-middle/micro-manage another Linux network driver
+# mitm0: Man-in-the-middle another Linux network driver
 
 A concise example of how a NDIS intermediate-like driver on Linux may be implemented. Net device operations are forwarded to the micromanaged network driver. Incoming packets enter the driver first as well before they are passed to the networking stack.
 
-mitm0 (formerly μman) uses the same mechanisms as the Linux switching API to control a single network interface.
+mitm0 (formerly μman) uses the same mechanisms as the Linux switching API to control/mitm/micro-manage a single network interface.
 
 ## How to use
 
@@ -22,5 +22,5 @@ Copyright (C) 2018 Ahmad Fatoum
 
 This kernel module is free software; you can redistribute it and/or modify it under the same terms as Linux itself. See the accompanying `COPYING` file for more information.
 
-[rpi-pollreq-pollres]: https://raw.githubusercontent.com/a3f/mitm/master/CN-rpi-4-9-rt-nopm-hackbench-720k.png
-[mitm-based-driver]: https://github.com/a3f/openPOWERLINK_V2
+[rpi-pollreq-pollres]: https://github.com/a3f/mitm0/blob/master/CN-rpi-4-9-rt-nopm-hackbench-720k.png
+[mitm-based driver]: https://github.com/a3f/openPOWERLINK_V2
