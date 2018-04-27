@@ -1,5 +1,5 @@
 /*
- * uman.c  --  the network driver micro-manager
+ * mitm.c  --  man-in-the-middle another network interface
  * Copyright (C) 2017 Ahmad Fatoum
  *
  * Based on the drivers/net/bonding/bond_main.c
@@ -28,8 +28,8 @@
 
 #define DRV_VERSION        "0.01"
 #define DRV_RELDATE        "2017-01-01"
-#define DRV_NAME        "uman"
-#define DRV_DESCRIPTION        "Network driver micro-manager"
+#define DRV_NAME           "mitm"
+#define DRV_DESCRIPTION    "Network driver Man-In-The-Middle'r"
 
 static bool use_qdisc = true;
 module_param(use_qdisc, bool, 0);
@@ -46,35 +46,35 @@ module_param(use_netpoll, bool, 0);
  * This structure is private to each device. It is used to pass
  * packets in and out, so there is place for a packet
  */
-struct uman {
+struct mitm {
 	struct net_device *dev;
 	spinlock_t lock;
 
 #ifdef CONFIG_NETPOLL
         struct netpoll np;
 #endif
-        netdev_tx_t (*xmit)(struct uman *uman, struct sk_buff *);
+        netdev_tx_t (*xmit)(struct mitm *mitm, struct sk_buff *);
 
 	struct slave {
 		struct net_device *dev;
 	} slave;
 };
 
-#define uman_slave_list(uman) (&(uman)->dev->adj_list.lower)
-#define uman_has_slave(uman) !list_empty(uman_slave_list(uman))
-#define uman_slave(uman) (uman_has_slave(uman) ? \
-	netdev_adjacent_get_private(uman_slave_list(uman)->next) : NULL)
-#define uman_of(slaveptr) container_of((slaveptr), struct uman, slave)
+#define mitm_slave_list(mitm) (&(mitm)->dev->adj_list.lower)
+#define mitm_has_slave(mitm) !list_empty(mitm_slave_list(mitm))
+#define mitm_slave(mitm) (mitm_has_slave(mitm) ? \
+	netdev_adjacent_get_private(mitm_slave_list(mitm)->next) : NULL)
+#define mitm_of(slaveptr) container_of((slaveptr), struct mitm, slave)
 
 /*----------------------------------- Rx ------------------------------------*/
 
 /*
  * Receive a packet: retrieve, encapsulate and pass over to upper levels
  */
-static rx_handler_result_t uman_handle_frame(struct sk_buff **pskb)
+static rx_handler_result_t mitm_handle_frame(struct sk_buff **pskb)
 {
     struct sk_buff *skb = *pskb;
-    struct uman *uman;
+    struct mitm *mitm;
 
     skb = skb_share_check(skb, GFP_ATOMIC);
     if (unlikely(!skb))
@@ -82,9 +82,9 @@ static rx_handler_result_t uman_handle_frame(struct sk_buff **pskb)
 
     *pskb = skb;
 
-    uman = rcu_dereference(skb->dev->rx_handler_data);
+    mitm = rcu_dereference(skb->dev->rx_handler_data);
 
-    skb->dev = uman->dev;
+    skb->dev = mitm->dev;
 
     return RX_HANDLER_ANOTHER; /* Do another round in receive path */
 }
@@ -94,11 +94,11 @@ static rx_handler_result_t uman_handle_frame(struct sk_buff **pskb)
 
 static int __packet_direct_xmit(struct sk_buff *skb);
 
-static netdev_tx_t uman_start_xmit(struct sk_buff *skb, struct net_device *dev)
+static netdev_tx_t mitm_start_xmit(struct sk_buff *skb, struct net_device *dev)
 {
     netdev_tx_t ret = NETDEV_TX_OK;
-    struct uman *uman = netdev_priv(dev);
-    struct slave *slave = uman_slave(uman);
+    struct mitm *mitm = netdev_priv(dev);
+    struct slave *slave = mitm_slave(mitm);
 
     BUILD_BUG_ON(sizeof(skb->queue_mapping) !=
              sizeof(qdisc_skb_cb(skb)->slave_dev_queue_mapping));
@@ -112,7 +112,7 @@ static netdev_tx_t uman_start_xmit(struct sk_buff *skb, struct net_device *dev)
     /* TODO rcu lock? */
     if (slave) {
         skb->dev = slave->dev;
-        ret = uman->xmit(uman, skb);
+        ret = mitm->xmit(mitm, skb);
     } else {
         atomic_long_inc(&dev->tx_dropped);
         dev_kfree_skb_any(skb);
@@ -132,7 +132,7 @@ static inline netdev_tx_t __packet_xmit_irq_enabled(netdev_tx_t (*xmit)(struct s
 
     return ret;
 }
-static netdev_tx_t packet_queue_xmit(struct uman *uman, struct sk_buff *skb)
+static netdev_tx_t packet_queue_xmit(struct mitm *mitm, struct sk_buff *skb)
 {
     BUILD_BUG_ON(sizeof(skb->queue_mapping) !=
             sizeof(qdisc_skb_cb(skb)->slave_dev_queue_mapping));
@@ -140,14 +140,14 @@ static netdev_tx_t packet_queue_xmit(struct uman *uman, struct sk_buff *skb)
 
     return __packet_xmit_irq_enabled(dev_queue_xmit, skb);
 }
-static netdev_tx_t packet_direct_xmit(struct uman *uman, struct sk_buff *skb)
+static netdev_tx_t packet_direct_xmit(struct mitm *mitm, struct sk_buff *skb)
 {
     return __packet_xmit_irq_enabled(__packet_direct_xmit, skb);
 }
-static netdev_tx_t packet_netpoll_xmit(struct uman *uman, struct sk_buff *skb)
+static netdev_tx_t packet_netpoll_xmit(struct mitm *mitm, struct sk_buff *skb)
 {
 #ifdef CONFIG_NETPOLL
-    netpoll_send_skb(&uman->np, skb);
+    netpoll_send_skb(&mitm->np, skb);
 #endif
     return NETDEV_TX_OK;
 }
@@ -214,7 +214,7 @@ drop:
 
 /*-------------------------- Bonding Notification ---------------------------*/
 
-static int uman_master_upper_dev_link(struct uman *uman, struct net_device *slave_dev)
+static int mitm_master_upper_dev_link(struct mitm *mitm, struct net_device *slave_dev)
 {
     int err;
     /* we aggregate everything into one link, so that's technically a broadcast */
@@ -222,16 +222,16 @@ static int uman_master_upper_dev_link(struct uman *uman, struct net_device *slav
         .tx_type = NETDEV_LAG_TX_TYPE_BROADCAST
     };
 
-    err = netdev_master_upper_dev_link(slave_dev, uman->dev, slave_dev, &lag_upper_info);
+    err = netdev_master_upper_dev_link(slave_dev, mitm->dev, slave_dev, &lag_upper_info);
     if (err)
         return err;
     rtmsg_ifinfo(RTM_NEWLINK, slave_dev, IFF_SLAVE, GFP_KERNEL);
     return 0;
 }
 
-static void uman_upper_dev_unlink(struct uman *uman, struct net_device *slave_dev)
+static void mitm_upper_dev_unlink(struct mitm *mitm, struct net_device *slave_dev)
 {
-    netdev_upper_dev_unlink(slave_dev, uman->dev);
+    netdev_upper_dev_unlink(slave_dev, mitm->dev);
     slave_dev->flags &= ~IFF_SLAVE;
     rtmsg_ifinfo(RTM_NEWLINK, slave_dev, IFF_SLAVE, GFP_KERNEL);
 }
@@ -248,40 +248,40 @@ static void bond_lower_state_changed(struct slave *slave)
 #endif
 
 /**
- * uman_set_dev_addr - clone slave's address to bond
- * @uman_dev: bond net device
+ * mitm_set_dev_addr - clone slave's address to bond
+ * @mitm_dev: bond net device
  * @slave_dev: slave net device
  *
  * Should be called with RTNL held.
  */
-static void uman_set_dev_addr(struct net_device *uman_dev, struct net_device *slave_dev)
+static void mitm_set_dev_addr(struct net_device *mitm_dev, struct net_device *slave_dev)
 {
-    netdev_dbg(uman_dev, "uman_dev=%p slave_dev=%p slave_dev->name=%s slave_dev->addr_len=%d\n",
-           uman_dev, slave_dev, slave_dev->name, slave_dev->addr_len);
-    memcpy(uman_dev->dev_addr, slave_dev->dev_addr, slave_dev->addr_len);
-    uman_dev->addr_assign_type = NET_ADDR_STOLEN;
-    call_netdevice_notifiers(NETDEV_CHANGEADDR, uman_dev);
+    netdev_dbg(mitm_dev, "mitm_dev=%p slave_dev=%p slave_dev->name=%s slave_dev->addr_len=%d\n",
+           mitm_dev, slave_dev, slave_dev->name, slave_dev->addr_len);
+    memcpy(mitm_dev->dev_addr, slave_dev->dev_addr, slave_dev->addr_len);
+    mitm_dev->addr_assign_type = NET_ADDR_STOLEN;
+    call_netdevice_notifiers(NETDEV_CHANGEADDR, mitm_dev);
 }
 
 /* Set carrier state of master on if there's a slave
  *
  * Returns zero if carrier state does not change, nonzero if it does.
  */
-static int uman_set_carrier(struct uman *uman)
+static int mitm_set_carrier(struct mitm *mitm)
 {
-    struct slave *slave = uman_slave(uman);
+    struct slave *slave = mitm_slave(mitm);
 
     if (!slave) {
-	if (netif_carrier_ok(uman->dev)) {
-	    netif_carrier_off(uman->dev);
+	if (netif_carrier_ok(mitm->dev)) {
+	    netif_carrier_off(mitm->dev);
 	    return 1;
 	}
 
 	return 0;
     }
 
-    if (!netif_carrier_ok(uman->dev)) {
-        netif_carrier_on(uman->dev);
+    if (!netif_carrier_ok(mitm->dev)) {
+        netif_carrier_on(mitm->dev);
         return 1;
     }
 
@@ -291,31 +291,31 @@ static int uman_set_carrier(struct uman *uman)
 
 /*--------------------------------- Slavery ---------------------------------*/
 
-static int uman_enslave(struct net_device *uman_dev,
+static int mitm_enslave(struct net_device *mitm_dev,
 		struct net_device *slave_dev)
 {
-    struct uman *uman = netdev_priv(uman_dev);
+    struct mitm *mitm = netdev_priv(mitm_dev);
     int res = 0;
 
-    /* We only micromanage one device */
-    if (uman_has_slave(uman)) {
-        netdev_err(uman_dev, "Error: uman can only have one slave\n");
+    /* We only mitm one device */
+    if (mitm_has_slave(mitm)) {
+        netdev_err(mitm_dev, "Error: mitm can only have one slave\n");
         return -EBUSY;
     }
 
     /* already in-use? */
     if (netdev_is_rx_handler_busy(slave_dev)) {
-        netdev_err(uman_dev, "Error: Device is in use and cannot be enslaved\n");
+        netdev_err(mitm_dev, "Error: Device is in use and cannot be enslaved\n");
         return -EBUSY;
     }
 
-    if (uman_dev == slave_dev) {
-        netdev_err(uman_dev, "uman cannot enslave itself.\n");
+    if (mitm_dev == slave_dev) {
+        netdev_err(mitm_dev, "mitm cannot enslave itself.\n");
         return -EPERM;
     }
 
     if (slave_dev->type != ARPHRD_ETHER) {
-        netdev_err(uman_dev, "uman can only enslave ethernet devices.\n");
+        netdev_err(mitm_dev, "mitm can only enslave ethernet devices.\n");
         return -EPERM;
     }
 
@@ -326,16 +326,16 @@ static int uman_enslave(struct net_device *uman_dev,
      * enslaving it; the old ifenslave will not.
      */
     if (slave_dev->flags & IFF_UP) {
-        netdev_err(uman_dev, "%s is up - this may be due to an out of date ifenslave\n",
+        netdev_err(mitm_dev, "%s is up - this may be due to an out of date ifenslave\n",
                slave_dev->name);
         return -EPERM;
     }
 
     call_netdevice_notifiers(NETDEV_JOIN, slave_dev);
 
-    uman_set_dev_addr(uman->dev, slave_dev);
+    mitm_set_dev_addr(mitm->dev, slave_dev);
 
-    uman->slave.dev = slave_dev;
+    mitm->slave.dev = slave_dev;
 
     /* set slave flag before open to prevent IPv6 addrconf */
     slave_dev->flags |= IFF_SLAVE;
@@ -343,54 +343,54 @@ static int uman_enslave(struct net_device *uman_dev,
     /* open the slave since the application closed it */
     res = dev_open(slave_dev);
     if (res) {
-        netdev_err(uman_dev, "Opening slave %s failed\n", slave_dev->name);
+        netdev_err(mitm_dev, "Opening slave %s failed\n", slave_dev->name);
         goto err_unslave;
     }
 
     slave_dev->priv_flags |= IFF_BONDING;
 
     /* set promiscuity level to new slave */
-    if (uman_dev->flags & IFF_PROMISC) {
+    if (mitm_dev->flags & IFF_PROMISC) {
         res = dev_set_promiscuity(slave_dev, 1);
         if (res)
             goto err_close;
     }
 
     /* set allmulti level to new slave */
-    if (uman_dev->flags & IFF_ALLMULTI) {
+    if (mitm_dev->flags & IFF_ALLMULTI) {
         res = dev_set_allmulti(slave_dev, 1);
         if (res)
             goto err_close;
     }
 
-    netif_addr_lock_bh(uman_dev);
+    netif_addr_lock_bh(mitm_dev);
 
-    dev_mc_sync_multiple(slave_dev, uman_dev);
-    dev_uc_sync_multiple(slave_dev, uman_dev);
+    dev_mc_sync_multiple(slave_dev, mitm_dev);
+    dev_uc_sync_multiple(slave_dev, mitm_dev);
 
-    netif_addr_unlock_bh(uman_dev);
+    netif_addr_unlock_bh(mitm_dev);
 
-    res = netdev_rx_handler_register(slave_dev, uman_handle_frame, uman);
+    res = netdev_rx_handler_register(slave_dev, mitm_handle_frame, mitm);
     if (res) {
-        netdev_err(uman_dev, "Error %d calling netdev_rx_handler_register\n", res);
+        netdev_err(mitm_dev, "Error %d calling netdev_rx_handler_register\n", res);
         goto err_detach;
     }
 
-    res = uman_master_upper_dev_link(uman, slave_dev);
+    res = mitm_master_upper_dev_link(mitm, slave_dev);
     if (res) {
-        netdev_err(uman_dev, "Error %d calling bond_master_upper_dev_link\n", res);
+        netdev_err(mitm_dev, "Error %d calling bond_master_upper_dev_link\n", res);
         goto err_unregister;
     }
 
-    uman_set_carrier(uman);
+    mitm_set_carrier(mitm);
 
-    netdev_info(uman_dev, "Enslaving %s interface\n", slave_dev->name);
+    netdev_info(mitm_dev, "Enslaving %s interface\n", slave_dev->name);
 
     return 0;
 
 /* Undo stages on error */
 err_unregister:
-    uman_upper_dev_unlink(uman, slave_dev);
+    mitm_upper_dev_unlink(mitm, slave_dev);
     netdev_rx_handler_unregister(slave_dev);
 
 err_detach:
@@ -400,9 +400,9 @@ err_close:
 
 err_unslave:
     slave_dev->flags &= ~IFF_SLAVE;
-    uman->slave.dev = NULL;
-    if (ether_addr_equal_64bits(uman_dev->dev_addr, slave_dev->dev_addr))
-        eth_hw_addr_random(uman_dev);
+    mitm->slave.dev = NULL;
+    if (ether_addr_equal_64bits(mitm_dev->dev_addr, slave_dev->dev_addr))
+        eth_hw_addr_random(mitm_dev);
 
     return res;
 }
@@ -418,44 +418,44 @@ err_unslave:
  *   for Bonded connections:
  *     The first up interface should be left on and all others downed.
  */
-static int uman_emancipate(struct net_device *uman_dev, struct net_device *slave_dev)
+static int mitm_emancipate(struct net_device *mitm_dev, struct net_device *slave_dev)
 {
-    struct uman *uman = netdev_priv(uman_dev);
+    struct mitm *mitm = netdev_priv(mitm_dev);
     struct slave *slave;
-    int old_flags = uman_dev->flags;
+    int old_flags = mitm_dev->flags;
 
     if (!slave_dev)
-        slave_dev = uman->slave.dev;
+        slave_dev = mitm->slave.dev;
 
     if (!slave_dev)
         return 0; /* nothing to do */
 
     /* slave is not a slave or master is not master of this slave */
-    if (!(slave_dev->flags & IFF_SLAVE) || !netdev_has_upper_dev(slave_dev, uman_dev)) {
-        netdev_err(uman_dev, "cannot release %s\n", slave_dev->name);
+    if (!(slave_dev->flags & IFF_SLAVE) || !netdev_has_upper_dev(slave_dev, mitm_dev)) {
+        netdev_err(mitm_dev, "cannot release %s\n", slave_dev->name);
         return -EINVAL;
     }
 
-    slave = uman_slave(uman);
+    slave = mitm_slave(mitm);
     if (!slave) {
-        /* not a slave of this uman */
-        netdev_err(uman_dev, "%s not enslaved\n", slave_dev->name);
+        /* not a slave of this mitm */
+        netdev_err(mitm_dev, "%s not enslaved\n", slave_dev->name);
         return -EINVAL;
     }
 
-    uman_upper_dev_unlink(uman, slave_dev);
-    /* unregister rx_handler early so uman_handle_frame wouldn't be called
+    mitm_upper_dev_unlink(mitm, slave_dev);
+    /* unregister rx_handler early so mitm_handle_frame wouldn't be called
      * for this slave anymore.
      */
     netdev_rx_handler_unregister(slave_dev);
 
-    netdev_info(uman_dev, "Releasing interface %s\n", slave_dev->name);
+    netdev_info(mitm_dev, "Releasing interface %s\n", slave_dev->name);
 
 
-    uman_set_carrier(uman);
-    eth_hw_addr_random(uman_dev);
-    call_netdevice_notifiers(NETDEV_CHANGEADDR, uman->dev);
-    call_netdevice_notifiers(NETDEV_RELEASE, uman->dev);
+    mitm_set_carrier(mitm);
+    eth_hw_addr_random(mitm_dev);
+    call_netdevice_notifiers(NETDEV_CHANGEADDR, mitm->dev);
+    call_netdevice_notifiers(NETDEV_RELEASE, mitm->dev);
 
     if (old_flags & IFF_PROMISC)
         dev_set_promiscuity(slave_dev, -1);
@@ -465,8 +465,8 @@ static int uman_emancipate(struct net_device *uman_dev, struct net_device *slave
 
 
     /* Flush bond's hardware addresses from slave */
-    dev_uc_unsync(slave_dev, uman_dev);
-    dev_mc_unsync(slave_dev, uman_dev);
+    dev_uc_unsync(slave_dev, mitm_dev);
+    dev_mc_unsync(slave_dev, mitm_dev);
 
 
     dev_close(slave_dev);
@@ -481,44 +481,44 @@ static int uman_emancipate(struct net_device *uman_dev, struct net_device *slave
 /*
  * Open and close
  */
-int uman_open(struct net_device *dev)
+int mitm_open(struct net_device *dev)
 {
 	/* Neither bond not team call netif_(start|stop)_queue. why? */
 	/* netif_start_queue(dev); */
 	return 0;
 }
 
-int uman_stop(struct net_device *dev)
+int mitm_stop(struct net_device *dev)
 {
 	/* netif_stop_queue(dev); */
 	return 0;
 }
 
-static const struct net_device_ops uman_netdev_ops = {
-	.ndo_open		= uman_open,
-	.ndo_stop		= uman_stop,
-	.ndo_start_xmit		= uman_start_xmit,
+static const struct net_device_ops mitm_netdev_ops = {
+	.ndo_open		= mitm_open,
+	.ndo_stop		= mitm_stop,
+	.ndo_start_xmit		= mitm_start_xmit,
 };
 
 /*
  * The init function (sometimes called probe).
  * It is invoked by register_netdev()
  */
-void uman_setup(struct net_device *uman_dev)
+void mitm_setup(struct net_device *mitm_dev)
 {
-	struct uman *uman = netdev_priv(uman_dev);
+	struct mitm *mitm = netdev_priv(mitm_dev);
 
-	spin_lock_init(&uman->lock);
-	uman->dev = uman_dev;
-	uman->slave.dev = NULL;
+	spin_lock_init(&mitm->lock);
+	mitm->dev = mitm_dev;
+	mitm->slave.dev = NULL;
 
-	ether_setup(uman_dev); /* assign some of the fields */
+	ether_setup(mitm_dev); /* assign some of the fields */
 
-	uman_dev->netdev_ops = &uman_netdev_ops;
+	mitm_dev->netdev_ops = &mitm_netdev_ops;
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(4,11,9)
-        uman_dev->needs_free_netdev = true;
+        mitm_dev->needs_free_netdev = true;
 #else
-	uman_dev->destructor = free_netdev;
+	mitm_dev->destructor = free_netdev;
 #endif
 
 }
@@ -528,9 +528,9 @@ static struct dentry *debugfs_dir;
 static ssize_t debugfs_get_slave(struct file *file, char __user *buff,
 	size_t count, loff_t *offset)
 {
-    struct net_device *uman_dev = file->f_inode->i_private;
-    struct uman *uman = netdev_priv(uman_dev);
-    struct slave *slave = uman_slave(uman);
+    struct net_device *mitm_dev = file->f_inode->i_private;
+    struct mitm *mitm = netdev_priv(mitm_dev);
+    struct slave *slave = mitm_slave(mitm);
 
     if (!debugfs_dir)
         return -EIO;
@@ -544,8 +544,8 @@ static ssize_t debugfs_get_slave(struct file *file, char __user *buff,
 static ssize_t debugfs_set_slave(struct file *file, const char __user *buff,
 size_t count, loff_t *offset)
 {
-    struct net_device *uman_dev = file->f_inode->i_private;
-    struct uman *uman = netdev_priv(uman_dev);
+    struct net_device *mitm_dev = file->f_inode->i_private;
+    struct mitm *mitm = netdev_priv(mitm_dev);
     struct net_device *slave_dev;
     char ifname[IFNAMSIZ+1];
     ssize_t ret, nulpos;
@@ -572,46 +572,46 @@ size_t count, loff_t *offset)
 	    if (!slave_dev)
 		return -EINVAL;
 
-	    printk(DRV_NAME ": (%p) You want to enslave %s@%p (%s)?\n", uman_dev,
+	    printk(DRV_NAME ": (%p) You want to enslave %s@%p (%s)?\n", mitm_dev,
 		    ifname, slave_dev, slave_dev->name);
 
-	    if ((result = uman_enslave(uman_dev, slave_dev)))
+	    if ((result = mitm_enslave(mitm_dev, slave_dev)))
 		ret = result;
 
 #ifdef CONFIG_NETPOLL
         if (use_netpoll)
         {
-            uman->np.name = "oplk-edrv-bridge";
-            strlcpy(uman->np.dev_name, slave_dev->name, IFNAMSIZ);
-            ret = __netpoll_setup(&uman->np, slave_dev);
+            mitm->np.name = "oplk-edrv-bridge";
+            strlcpy(mitm->np.dev_name, slave_dev->name, IFNAMSIZ);
+            ret = __netpoll_setup(&mitm->np, slave_dev);
             if (ret < 0)
             {
                 printk(KERN_ERR "%s() Failed to setup netpoll for %s: error %zd\n", __func__, slave_dev->name, ret);
-                uman->np.dev = NULL;
+                mitm->np.dev = NULL;
                 goto unlock;
             }
         }
 #endif
 
-    uman->xmit = use_qdisc   ? packet_queue_xmit
+    mitm->xmit = use_qdisc   ? packet_queue_xmit
                : use_netpoll ? packet_netpoll_xmit
                :               packet_direct_xmit;
 
-    printk("uman%s: %s mode will be used on %s\n", uman_dev->name,
+    printk("mitm%s: %s mode will be used on %s\n", mitm_dev->name,
             use_qdisc   ? "Qdisc" :
             use_netpoll ? "Netpoll" :
                           "Direct-xmit",
             slave_dev->name);
 
     } else {
-            uman->xmit = NULL; /* FIXME might be racy... */
+            mitm->xmit = NULL; /* FIXME might be racy... */
 #ifdef CONFIG_NETPOLL
-            if (uman->np.dev) {
-                netpoll_cleanup(&uman->np);
-                uman->np.dev = NULL;
+            if (mitm->np.dev) {
+                netpoll_cleanup(&mitm->np);
+                mitm->np.dev = NULL;
             }
 #endif
-	    if ((result = uman_emancipate(uman_dev, NULL)))
+	    if ((result = mitm_emancipate(mitm_dev, NULL)))
 		ret = result;
     }
 
@@ -626,59 +626,60 @@ static const struct file_operations slave_fops = {
 };
 
 /*---------------------------- Module init/fini -----------------------------*/
-static struct net_device *uman_dev;
+static struct net_device *mitm_dev;
 
 
 
-int __init uman_init_module(void)
+int __init mitm_init_module(void)
 {
 	int ret;
 
 	/* Allocate the devices */
-	uman_dev = alloc_netdev(sizeof(struct uman), "uman%d",
-		NET_NAME_UNKNOWN, uman_setup);
-	if (!uman_dev)
+	mitm_dev = alloc_netdev(sizeof(struct mitm), "mitm%d",
+		NET_NAME_UNKNOWN, mitm_setup);
+	if (!mitm_dev)
 		return -ENOMEM;
 
-	if ((ret = register_netdev(uman_dev))) {
+	if ((ret = register_netdev(mitm_dev))) {
 		printk(DRV_NAME ": error %i registering device \"%s\"\n",
-				ret, uman_dev->name);
-		unregister_netdev(uman_dev);
+				ret, mitm_dev->name);
+		unregister_netdev(mitm_dev);
 		return -ENODEV;
 	}
 
-	debugfs_dir = debugfs_create_dir(uman_dev->name, NULL);
+	debugfs_dir = debugfs_create_dir(mitm_dev->name, NULL);
 	if (IS_ERR_OR_NULL(debugfs_dir)) {
 		printk(KERN_ALERT DRV_NAME ": failed to create /sys/kernel/debug/%s\n",
-            uman_dev->name);
+            mitm_dev->name);
 		debugfs_dir = NULL;
 	} else {
 		struct dentry *dentry = debugfs_create_file("slave", 0600, debugfs_dir,
-            uman_dev, &slave_fops);
+            mitm_dev, &slave_fops);
 		if (IS_ERR_OR_NULL(dentry)) {
 			printk(KERN_ALERT DRV_NAME ": failed to create /sys/kernel/debug/%s/slave\n",
-            uman_dev->name);
+            mitm_dev->name);
 		}
 	}
 
-	printk(DRV_NAME ": Initialized module with interface %s@%p\n", uman_dev->name, uman_dev);
+	printk(DRV_NAME ": Initialized module with interface %s@%p\n", mitm_dev->name, mitm_dev);
 
 	return 0;
 }
 
-void __exit uman_exit_module(void)
+void __exit mitm_exit_module(void)
 {
     if (debugfs_dir)
         debugfs_remove_recursive(debugfs_dir);
     rtnl_lock();
-    uman_emancipate(uman_dev, NULL);
+    mitm_emancipate(mitm_dev, NULL);
     rtnl_unlock();
-	unregister_netdev(uman_dev);
+	unregister_netdev(mitm_dev);
 	printk(DRV_NAME ": Exiting module\n");
 }
 
-module_init(uman_init_module);
-module_exit(uman_exit_module);
+module_init(mitm_init_module);
+module_exit(mitm_exit_module);
+
 
 MODULE_AUTHOR("Ahmad Fatoum");
 MODULE_LICENSE("GPL");

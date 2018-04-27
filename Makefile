@@ -1,4 +1,4 @@
-obj-m := uman.o
+obj-m := mitm.o
 MY_CFLAGS += -g -DDEBUG
 ccflags-y += ${MY_CFLAGS}
 CC += ${MY_CFLAGS}
@@ -20,20 +20,20 @@ probe:
 slave_up:
 	sudo ifconfig $(SLAVE_IF) up
 	sudo dhclient $(SLAVE_IF)
-	nc -l $(shell ifconfig uman0 | grep "inet " | awk -F'[: ]+' '{ print $$4 }') 1337
+	nc -l $(shell ifconfig mitm0 | grep "inet " | awk -F'[: ]+' '{ print $$4 }') 1337
 
 nc:
-	nc -l $(shell ifconfig uman0 | grep "inet " | awk -F'[: ]+' '{ print $$4 }') 1337
+	nc -l $(shell ifconfig mitm0 | grep "inet " | awk -F'[: ]+' '{ print $$4 }') 1337
 
 slave_down:
 	sudo ifconfig $(SLAVE_IF) down
 
 enslave:
-	sudo sh -c 'printf $(SLAVE_IF) > /sys/kernel/debug/uman0/slave'
+	sudo sh -c 'printf $(SLAVE_IF) > /sys/kernel/debug/mitm0/slave'
 release:
-	sudo sh -c 'echo > /sys/kernel/debug/uman0/slave'
+	sudo sh -c 'echo > /sys/kernel/debug/mitm0/slave'
 get_slave:
-	sudo cat /sys/kernel/debug/uman0/slave
+	sudo cat /sys/kernel/debug/mitm0/slave
 flush_slave_ip:
 	sudo ip addr flush dev $(SLAVE_IF)
 
