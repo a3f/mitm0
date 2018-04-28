@@ -62,9 +62,13 @@ struct mitm {
 };
 
 #define mitm_slave_list(mitm) (&(mitm)->dev->adj_list.lower)
-#define mitm_has_slave(mitm) !list_empty(mitm_slave_list(mitm))
-#define mitm_slave(mitm) (mitm_has_slave(mitm) ? \
-	netdev_adjacent_get_private(mitm_slave_list(mitm)->next) : NULL)
+#define mitm_has_slave(mitm) (!list_empty(mitm_slave_list(mitm)))
+static inline struct slave *mitm_slave(struct mitm *mitm)
+{
+    if (!mitm_has_slave(mitm))
+	return NULL;
+    return netdev_adjacent_get_private(mitm_slave_list(mitm)->next);
+}
 #define mitm_of(slaveptr) container_of((slaveptr), struct mitm, slave)
 
 /*----------------------------------- Rx ------------------------------------*/
@@ -215,7 +219,7 @@ drop:
 
 /*-------------------------- Bonding Notification ---------------------------*/
 
-static int mitm_master_upper_dev_link(struct mitm *mitm, struct net_device *slave_dev)
+static int mitm_master_upper_dev_link(struct mitm *mitm, struct slave *slave)
 {
     int err;
     /* we aggregate everything into one link, so that's technically a broadcast */
@@ -223,18 +227,18 @@ static int mitm_master_upper_dev_link(struct mitm *mitm, struct net_device *slav
         .tx_type = NETDEV_LAG_TX_TYPE_BROADCAST
     };
 
-    err = netdev_master_upper_dev_link(slave_dev, mitm->dev, slave_dev, &lag_upper_info);
+    err = netdev_master_upper_dev_link(slave->dev, mitm->dev, slave, &lag_upper_info);
     if (err)
         return err;
-    rtmsg_ifinfo(RTM_NEWLINK, slave_dev, IFF_SLAVE, GFP_KERNEL);
+    rtmsg_ifinfo(RTM_NEWLINK, slave->dev, IFF_SLAVE, GFP_KERNEL);
     return 0;
 }
 
-static void mitm_upper_dev_unlink(struct mitm *mitm, struct net_device *slave_dev)
+static void mitm_upper_dev_unlink(struct mitm *mitm, struct slave *slave)
 {
-    netdev_upper_dev_unlink(slave_dev, mitm->dev);
-    slave_dev->flags &= ~IFF_SLAVE;
-    rtmsg_ifinfo(RTM_NEWLINK, slave_dev, IFF_SLAVE, GFP_KERNEL);
+    netdev_upper_dev_unlink(slave->dev, mitm->dev);
+    slave->dev->flags &= ~IFF_SLAVE;
+    rtmsg_ifinfo(RTM_NEWLINK, slave->dev, IFF_SLAVE, GFP_KERNEL);
 }
 /* FIXME unused */
 #if 0
@@ -377,9 +381,9 @@ static int mitm_enslave(struct net_device *mitm_dev,
         goto err_detach;
     }
 
-    res = mitm_master_upper_dev_link(mitm, slave_dev);
+    res = mitm_master_upper_dev_link(mitm, &mitm->slave);
     if (res) {
-        netdev_err(mitm_dev, "Error %d calling bond_master_upper_dev_link\n", res);
+        netdev_err(mitm_dev, "Error %d calling mitm_master_upper_dev_link\n", res);
         goto err_unregister;
     }
 
@@ -391,7 +395,7 @@ static int mitm_enslave(struct net_device *mitm_dev,
 
 /* Undo stages on error */
 err_unregister:
-    mitm_upper_dev_unlink(mitm, slave_dev);
+    mitm_upper_dev_unlink(mitm, &mitm->slave);
     netdev_rx_handler_unregister(slave_dev);
 
 err_detach:
@@ -444,7 +448,7 @@ static int mitm_emancipate(struct net_device *mitm_dev, struct net_device *slave
         return -EINVAL;
     }
 
-    mitm_upper_dev_unlink(mitm, slave_dev);
+    mitm_upper_dev_unlink(mitm, slave);
     /* unregister rx_handler early so mitm_handle_frame wouldn't be called
      * for this slave anymore.
      */
