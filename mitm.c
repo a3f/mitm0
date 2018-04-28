@@ -7,6 +7,7 @@
  * Licensed under the GPL. Itself based on dummy.c, and eql.c devices.
  */
 
+#include <linux/version.h>
 #include <linux/module.h>
 #include <linux/init.h>
 #include <linux/moduleparam.h>
