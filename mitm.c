@@ -597,7 +597,7 @@ size_t count, loff_t *offset)
                : use_netpoll ? packet_netpoll_xmit
                :               packet_direct_xmit;
 
-    printk("mitm%s: %s mode will be used on %s\n", mitm_dev->name,
+    printk("%s: %s mode will be used on %s\n", mitm_dev->name,
             use_qdisc   ? "Qdisc" :
             use_netpoll ? "Netpoll" :
                           "Direct-xmit",
