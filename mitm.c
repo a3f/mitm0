@@ -42,6 +42,23 @@ MODULE_PARM_DESC(use_netpoll, "Use netpoll if possible? 0 = no (default), 1 = ye
 module_param(use_netpoll, bool, 0000);
 #endif
 
+static bool intercept_ping = true;
+MODULE_PARM_DESC(intercept_ping, "Enable ICMP echo (ping) interception example code? 0 = no, 1 = yes (default)");
+module_param(intercept_ping, bool, 0000);
+
+/*
+ * enum mitm_handler_result - Possible return values for handlers.
+ * @MITM_CONSUMED: skb was consumed by handler, do not process it further.
+ * @MITM_FORWARD:  forward to paired device.
+ * @MITM_REPLY:    reply through same device (only slave supported)
+ * @MITM_DROP:     Drop the packet
+ */
+enum mitm_handler_result {
+	MITM_CONSUMED,
+	MITM_FORWARD,
+	MITM_REPLY,
+	MITM_DROP
+};
 
 /*
  * This structure is private to each device. It is used to pass
@@ -50,6 +67,9 @@ module_param(use_netpoll, bool, 0000);
 struct mitm {
 	struct net_device *dev;
 	spinlock_t lock;
+
+	enum mitm_handler_result (*handle_ingress)(struct mitm *mitm, struct sk_buff *skb);
+	enum mitm_handler_result (*handle_egress)(struct mitm *mitm, struct sk_buff *skb);
 
 #ifdef CONFIG_NETPOLL
 	struct netpoll np;
@@ -71,8 +91,77 @@ static inline struct slave *mitm_slave(struct mitm *mitm)
 }
 #define mitm_of(slaveptr) container_of((slaveptr), struct mitm, slave)
 
-/*----------------------------------- Rx ------------------------------------*/
+/*------------------------------- Example Code ------------------------------*/
 
+// Headers required by user code.
+#include <linux/ip.h>
+#include <linux/icmp.h>
+#include <linux/if_ether.h>
+#include <linux/if_vlan.h>
+
+// Swap src/dest ethernet addresses
+static void eth_swap_addr(struct sk_buff *skb)
+{
+	struct ethhdr *eth = (struct ethhdr *)skb_mac_header(skb);
+	unsigned char tmp[ETH_ALEN];
+
+	memcpy(tmp, eth->h_dest, ETH_ALEN);
+	memcpy(eth->h_dest, eth->h_source, ETH_ALEN);
+	memcpy(eth->h_source, tmp, ETH_ALEN);
+}
+
+static enum mitm_handler_result mitm_from_slave(struct mitm *mitm, struct sk_buff *skb)
+{
+	// Example code: Intercept ping and reply directly
+
+	uint16_t protocol = ntohs(vlan_get_protocol(skb));
+	uint8_t *header = skb_mac_header(skb);
+
+	// If IPv4...
+	if (protocol == ETH_P_IP) {
+		// Find IP header.
+		struct iphdr *iph = ip_hdr(skb);
+		// If ICMP...
+		if (iph->protocol == IPPROTO_ICMP) {
+			int offset = iph->ihl << 2;
+			uint8_t *ip_payload = (skb->data + offset);
+			struct icmphdr *icmph = (struct icmphdr *)ip_payload;
+			// If ping request...
+			if (icmph->type == ICMP_ECHO) {
+				__be32 tmp;
+				// Swap ETH addresses.
+				eth_swap_addr(skb);
+				// Swap IP addresses.
+				tmp = iph->daddr;
+				iph->daddr = iph->saddr;
+				iph->saddr = tmp;
+				// Fix IP checksum.
+				iph->check = 0;
+				iph->check = ip_fast_csum(iph, iph->ihl);
+				// Change ping request into a reply.
+				icmph->type = ICMP_ECHOREPLY;
+				// Fix ICMP checksum.
+				icmph->checksum = 0;
+				icmph->checksum = ip_compute_csum(icmph, skb_tail_pointer(skb)-ip_payload);
+				// Send this packet directly back.
+				// ->data points to eth header.
+				skb_push(skb, skb->data-header);
+				return MITM_REPLY;
+			}
+		}
+	}
+
+	// TODO: Tweak packets here.
+	return MITM_FORWARD;
+}
+
+static enum mitm_handler_result mitm_from_master(struct mitm *mitm, struct sk_buff *skb)
+{
+	// TODO: Tweak packets here.
+	return MITM_FORWARD;
+}
+
+/*----------------------------------- Rx ------------------------------------*/
 /*
  * Receive a packet: retrieve, encapsulate and pass over to upper levels
  */
@@ -89,9 +178,21 @@ static rx_handler_result_t mitm_handle_frame(struct sk_buff **pskb)
 
 	mitm = rcu_dereference(skb->dev->rx_handler_data);
 
-	skb->dev = mitm->dev;
-
-	return RX_HANDLER_ANOTHER; /* Do another round in receive path */
+	switch (mitm->handle_ingress(mitm, skb)) {
+	case MITM_FORWARD: // Associate packet with master.
+		skb->dev = mitm->dev;
+		return RX_HANDLER_ANOTHER;
+	case MITM_REPLY: // Packet already associated with the slave.
+		// Mode-dependent transmit.
+		(void)mitm->xmit(mitm, skb);
+		// Consumed because is queued elsewhere.
+	case MITM_CONSUMED:
+		return RX_HANDLER_CONSUMED;
+	default: // Drop.
+		atomic_long_inc(&(skb->dev->tx_dropped));
+		dev_kfree_skb_any(skb);
+		return RX_HANDLER_CONSUMED;
+	}
 }
 
 
@@ -99,9 +200,12 @@ static rx_handler_result_t mitm_handle_frame(struct sk_buff **pskb)
 
 static int __packet_direct_xmit(struct sk_buff *skb);
 
+enum mitm_handler_result forward(struct mitm *mitm __maybe_unused, struct sk_buff *skb __maybe_unused)
+{
+	return MITM_FORWARD;
+}
 static netdev_tx_t mitm_start_xmit(struct sk_buff *skb, struct net_device *dev)
 {
-	netdev_tx_t ret = NETDEV_TX_OK;
 	struct mitm *mitm = netdev_priv(dev);
 	struct slave *slave = mitm_slave(mitm);
 
@@ -115,16 +219,25 @@ static netdev_tx_t mitm_start_xmit(struct sk_buff *skb, struct net_device *dev)
 #endif
 
 	/* TODO rcu lock? */
+
 	if (slave) {
-		skb->dev = slave->dev;
-		ret = mitm->xmit(mitm, skb);
-	} else {
-		atomic_long_inc(&dev->tx_dropped);
-		dev_kfree_skb_any(skb);
+		switch (mitm->handle_egress(mitm, skb)) {
+		case MITM_FORWARD:
+			// Associate the packet with the slave
+			skb->dev = slave->dev;
+			// Mode-dependent transmit.
+			return mitm->xmit(mitm, skb);
+		case MITM_CONSUMED:
+			return NETDEV_TX_OK;
+		default:
+			break;
+		}
 	}
 
+	atomic_long_inc(&dev->tx_dropped);
+	dev_kfree_skb_any(skb);
 
-	return ret;
+	return NETDEV_TX_OK;
 }
 static inline netdev_tx_t __packet_xmit_irq_enabled(netdev_tx_t (*xmit)(struct sk_buff *), struct sk_buff *skb)
 {
@@ -641,6 +754,7 @@ static struct net_device *mitm_dev;
 int __init mitm_init_module(void)
 {
 	int ret;
+	struct mitm *mitm;
 
 	/* Allocate the devices */
 	mitm_dev = alloc_netdev(sizeof(struct mitm), "mitm%d",
@@ -670,7 +784,15 @@ int __init mitm_init_module(void)
 		}
 	}
 
-	netdev_info(mitm_dev, "Initialized module with interface %s@%p\n", mitm_dev->name, mitm_dev);
+	mitm = netdev_priv(mitm_dev);
+	mitm->handle_ingress = mitm->handle_egress = forward;
+
+	if (intercept_ping) {
+		mitm->handle_ingress = mitm_from_slave;
+		mitm->handle_egress  = mitm_from_master;
+	}
+
+	netdev_info(mitm_dev, "Initialized module with interface %s\n", mitm_dev->name);
 
 	return 0;
 }
