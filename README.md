@@ -1,4 +1,4 @@
-# mitm0: Man-in-the-middle another Linux network driver
+# mitm0: Man-in-the-middle another Linux network driver [![Build Status](https://travis-ci.org/a3f/mitm0.svg?branch=master)](https://travis-ci.org/a3f/mitm0)
 
 A concise example of how a NDIS intermediate-like driver on Linux may be implemented. Net device operations are forwarded to the micromanaged network driver. Incoming packets enter the driver first as well before they are passed to the networking stack.
 

@@ -1,0 +1,10 @@
+language: c
+sudo: required
+dist: trusty
+
+before_install:
+  - sudo apt-get install linux-headers-$(uname -r)
+
+script:
+  - ./checkpatch.pl --notree -f *.c --max-line-length=120 --ignore CONSTANT_COMPARISON --ignore LINUX_VERSION_CODE
+  - make

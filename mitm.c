@@ -33,13 +33,13 @@
 #define DRV_DESCRIPTION    "Network driver Man-In-The-Middle'r"
 
 static bool use_qdisc = true;
-module_param(use_qdisc, bool, 0);
+module_param(use_qdisc, bool, 0000);
 MODULE_PARM_DESC(use_qdisc, "Use Qdisc? 0 = no, 1 = yes (default)");
 
-static bool use_netpoll = false;
+static bool use_netpoll;
 #ifdef CONFIG_NETPOLL
 MODULE_PARM_DESC(use_netpoll, "Use netpoll if possible? 0 = no (default), 1 = yes");
-module_param(use_netpoll, bool, 0);
+module_param(use_netpoll, bool, 0000);
 #endif
 
 
@@ -131,9 +131,11 @@ static inline netdev_tx_t __packet_xmit_irq_enabled(netdev_tx_t (*xmit)(struct s
 	netdev_tx_t ret;
 	bool enable_irq = irqs_disabled(); /* always false in our current setup, but your use case may change */
 
-	if (enable_irq) local_irq_enable();
+	if (enable_irq)
+		local_irq_enable();
 	ret = xmit(skb);
-	if (enable_irq) local_irq_disable();
+	if (enable_irq)
+		local_irq_disable();
 
 	return ret;
 }
@@ -169,8 +171,7 @@ static void packet_pick_tx_queue(struct net_device *dev, struct sk_buff *skb)
 	const struct net_device_ops *ops = dev->netdev_ops;
 	u16 queue_index;
 
-	if (ops->ndo_select_queue)
-	{
+	if (ops->ndo_select_queue) {
 		queue_index = ops->ndo_select_queue(dev, skb, NULL,
 						    __packet_pick_tx_queue);
 		queue_index = netdev_cap_txqueue(dev, queue_index);
@@ -187,8 +188,7 @@ static int __packet_direct_xmit(struct sk_buff *skb)
 	struct netdev_queue *txq;
 	int ret = NETDEV_TX_BUSY;
 
-	if (unlikely(!netif_running(dev) ||
-		     !netif_carrier_ok(dev)))
+	if (unlikely(!netif_running(dev) || !netif_carrier_ok(dev)))
 		goto drop;
 
 	skb = validate_xmit_skb_list(skb, dev);
@@ -520,7 +520,7 @@ void mitm_setup(struct net_device *mitm_dev)
 	ether_setup(mitm_dev); /* assign some of the fields */
 
 	mitm_dev->netdev_ops = &mitm_netdev_ops;
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(4,11,9)
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 11, 9)
 	mitm_dev->needs_free_netdev = true;
 #else
 	mitm_dev->destructor = free_netdev;
@@ -553,18 +553,17 @@ static ssize_t debugfs_set_slave(struct file *file, const char __user *buff,
 	struct mitm *mitm = netdev_priv(mitm_dev);
 	struct net_device *slave_dev;
 	char ifname[IFNAMSIZ+1];
-	ssize_t ret, nulpos;
-	int result;
+	ssize_t nbytes, ret = 0, nulpos;
 
 	if (!debugfs_dir)
 		return -EIO;
 
-	ret = simple_write_to_buffer(ifname, sizeof ifname-1, offset, buff, count);
-	if (ret <= 0)
-		return ret;
+	nbytes = simple_write_to_buffer(ifname, sizeof(ifname)-1, offset, buff, count);
+	if (nbytes <= 0)
+		return nbytes;
 
-	nulpos = ret;
-	if (ifname[ret-1] == '\n')
+	nulpos = nbytes;
+	if (ifname[nbytes-1] == '\n')
 		nulpos--;
 
 	ifname[nulpos] = '\0';
@@ -579,21 +578,20 @@ static ssize_t debugfs_set_slave(struct file *file, const char __user *buff,
 			goto unlock;
 		}
 
-		printk(DRV_NAME ": (%p) You want to enslave %s@%p (%s)?\n", mitm_dev,
-		       ifname, slave_dev, slave_dev->name);
+		netdev_info(slave_dev, "You want to enslave %s (%s)?\n",
+		       ifname, slave_dev->name);
 
-		if ((result = mitm_enslave(mitm_dev, slave_dev)))
-			ret = result;
+		ret = mitm_enslave(mitm_dev, slave_dev);
+		if (ret)
+			goto unlock;
 
 #ifdef CONFIG_NETPOLL
-		if (use_netpoll)
-		{
-			mitm->np.name = "oplk-edrv-bridge";
+		if (use_netpoll) {
+			mitm->np.name = "mitm-netpoll";
 			strlcpy(mitm->np.dev_name, slave_dev->name, IFNAMSIZ);
 			ret = __netpoll_setup(&mitm->np, slave_dev);
-			if (ret < 0)
-			{
-				printk(KERN_ERR "%s() Failed to setup netpoll for %s: error %zd\n", __func__, slave_dev->name, ret);
+			if (ret < 0) {
+				netdev_err(slave_dev, "%s() Failed to setup netpoll: error %zd\n", __func__, ret);
 				mitm->np.dev = NULL;
 				goto unlock;
 			}
@@ -604,10 +602,10 @@ static ssize_t debugfs_set_slave(struct file *file, const char __user *buff,
 			   : use_netpoll ? packet_netpoll_xmit
 			   :               packet_direct_xmit;
 
-		printk("%s: %s mode will be used on %s\n", mitm_dev->name,
-		       use_qdisc   ? "Qdisc" :
-		       use_netpoll ? "Netpoll" :
-		                     "Direct-xmit",
+		netdev_info(mitm_dev, "%s mode will be used on %s\n",
+		       use_qdisc   ? "Qdisc"
+		     : use_netpoll ? "Netpoll"
+		     :               "Direct-xmit",
 		       slave_dev->name);
 
 	} else {
@@ -618,13 +616,12 @@ static ssize_t debugfs_set_slave(struct file *file, const char __user *buff,
 			mitm->np.dev = NULL;
 		}
 #endif
-		if ((result = mitm_emancipate(mitm_dev, NULL)))
-			ret = result;
+		ret = mitm_emancipate(mitm_dev, NULL);
 	}
 
 unlock:
 	rtnl_unlock();
-	return ret;
+	return ret == 0 ? nbytes : ret;
 }
 static const struct file_operations slave_fops = {
 	.owner = THIS_MODULE,
@@ -647,8 +644,9 @@ int __init mitm_init_module(void)
 	if (!mitm_dev)
 		return -ENOMEM;
 
-	if ((ret = register_netdev(mitm_dev))) {
-		printk(DRV_NAME ": error %i registering device \"%s\"\n",
+	ret = register_netdev(mitm_dev);
+	if (ret) {
+		netdev_err(mitm_dev, "Error %i registering device \"%s\"\n",
 		       ret, mitm_dev->name);
 		unregister_netdev(mitm_dev);
 		return -ENODEV;
@@ -656,32 +654,31 @@ int __init mitm_init_module(void)
 
 	debugfs_dir = debugfs_create_dir(mitm_dev->name, NULL);
 	if (IS_ERR_OR_NULL(debugfs_dir)) {
-		printk(KERN_ALERT DRV_NAME ": failed to create /sys/kernel/debug/%s\n",
+		netdev_alert(mitm_dev, "Failed to create /sys/kernel/debug/%s\n",
 		       mitm_dev->name);
 		debugfs_dir = NULL;
 	} else {
 		struct dentry *dentry = debugfs_create_file("slave", 0600, debugfs_dir,
 							    mitm_dev, &slave_fops);
 		if (IS_ERR_OR_NULL(dentry)) {
-			printk(KERN_ALERT DRV_NAME ": failed to create /sys/kernel/debug/%s/slave\n",
+			netdev_alert(mitm_dev, "Failed to create /sys/kernel/debug/%s/slave\n",
 			       mitm_dev->name);
 		}
 	}
 
-	printk(DRV_NAME ": Initialized module with interface %s@%p\n", mitm_dev->name, mitm_dev);
+	netdev_info(mitm_dev, "Initialized module with interface %s@%p\n", mitm_dev->name, mitm_dev);
 
 	return 0;
 }
 
 void __exit mitm_exit_module(void)
 {
-	if (debugfs_dir)
-		debugfs_remove_recursive(debugfs_dir);
+	debugfs_remove_recursive(debugfs_dir);
 	rtnl_lock();
 	mitm_emancipate(mitm_dev, NULL);
 	rtnl_unlock();
 	unregister_netdev(mitm_dev);
-	printk(DRV_NAME ": Exiting module\n");
+	pr_info("Exiting module\n");
 }
 
 module_init(mitm_init_module);
