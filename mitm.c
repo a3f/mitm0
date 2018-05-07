@@ -574,8 +574,10 @@ size_t count, loff_t *offset)
     if (nulpos) {
 	    slave_dev = __dev_get_by_name(&init_net, ifname);
 
-	    if (!slave_dev)
-		return -EINVAL;
+	    if (!slave_dev) {
+		ret = -EINVAL;
+		goto unlock;
+            }
 
 	    printk(DRV_NAME ": (%p) You want to enslave %s@%p (%s)?\n", mitm_dev,
 		    ifname, slave_dev, slave_dev->name);
