@@ -223,11 +223,15 @@ static int mitm_master_upper_dev_link(struct mitm *mitm, struct slave *slave)
 {
 	int err;
 	/* we aggregate everything into one link, so that's technically a broadcast */
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 5, 0)
 	struct netdev_lag_upper_info lag_upper_info = {
 		.tx_type = NETDEV_LAG_TX_TYPE_BROADCAST
 	};
 
 	err = netdev_master_upper_dev_link(slave->dev, mitm->dev, slave, &lag_upper_info);
+#else
+	err = netdev_master_upper_dev_link(slave->dev, mitm->dev);
+#endif
 	if (err)
 		return err;
 	rtmsg_ifinfo(RTM_NEWLINK, slave->dev, IFF_SLAVE, GFP_KERNEL);
