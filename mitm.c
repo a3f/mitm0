@@ -43,6 +43,10 @@ MODULE_PARM_DESC(use_netpoll, "Use netpoll if possible? 0 = no (default), 1 = ye
 module_param(use_netpoll, bool, 0000);
 #endif
 
+static bool use_tasklet;
+module_param(use_tasklet, bool, 0000);
+MODULE_PARM_DESC(use_tasklet, "offload to tasklet? 0 = no (default), 1 = yes");
+
 static bool intercept_ping = true;
 MODULE_PARM_DESC(intercept_ping, "Enable ICMP echo (ping) interception example code? 0 = no, 1 = yes (default)");
 module_param(intercept_ping, bool, 0000);
@@ -75,7 +79,8 @@ struct mitm {
 #ifdef CONFIG_NETPOLL
 	struct netpoll np;
 #endif
-	netdev_tx_t (*xmit)(struct mitm *mitm, struct sk_buff *);
+	struct tasklet_struct tx_tasklet;
+	struct sk_buff_head txqueue;
 
 	struct slave {
 		struct net_device *dev;
@@ -91,6 +96,8 @@ static inline struct slave *mitm_slave(struct mitm *mitm)
 	return netdev_adjacent_get_private(mitm_slave_list(mitm)->next);
 }
 #define mitm_of(slaveptr) container_of((slaveptr), struct mitm, slave)
+
+static int mitm_xmit(struct mitm *mitm, struct sk_buff *skb);
 
 /*------------------------------- Example Code ------------------------------*/
 
@@ -185,7 +192,7 @@ static rx_handler_result_t mitm_handle_frame(struct sk_buff **pskb)
 		return RX_HANDLER_ANOTHER;
 	case MITM_REPLY: // Packet already associated with the slave.
 		// Mode-dependent transmit.
-		(void)mitm->xmit(mitm, skb);
+		(void)mitm_xmit(mitm, skb);
 		// Consumed because is queued elsewhere.
 		/* fall through */
 	case MITM_CONSUMED:
@@ -200,7 +207,66 @@ static rx_handler_result_t mitm_handle_frame(struct sk_buff **pskb)
 
 /*----------------------------------- Tx ------------------------------------*/
 
-static int __packet_direct_xmit(struct sk_buff *skb);
+static u16 packet_pick_tx_queue(struct sk_buff *skb)
+{
+	struct net_device *dev = skb->dev;
+	const struct net_device_ops *ops = dev->netdev_ops;
+	int cpu = raw_smp_processor_id();
+	u16 queue_index;
+
+#ifdef CONFIG_XPS
+	skb->sender_cpu = cpu + 1;
+#endif
+	skb_record_rx_queue(skb, cpu % dev->real_num_tx_queues);
+	if (ops->ndo_select_queue) {
+		queue_index = ops->ndo_select_queue(dev, skb, NULL);
+		queue_index = netdev_cap_txqueue(dev, queue_index);
+	} else {
+		queue_index = netdev_pick_tx(dev, skb, NULL);
+	}
+
+	return queue_index;
+}
+
+static netdev_tx_t __mitm_xmit(struct mitm *mitm, struct sk_buff *skb)
+{
+	if (use_qdisc)
+		return dev_queue_xmit(skb);
+
+	return dev_direct_xmit(skb, packet_pick_tx_queue(skb));
+}
+
+static void mitm_xmit_bh(unsigned long data)
+{
+	struct mitm *mitm = (void *)data;
+	struct sk_buff *skb;
+	netdev_tx_t ret;
+
+	skb = skb_dequeue(&mitm->txqueue);
+	if (WARN_ON_ONCE(!skb))
+		return;
+
+	ret = __mitm_xmit(mitm, skb);
+	WARN_ON(ret);
+}
+
+static netdev_tx_t mitm_xmit(struct mitm *mitm, struct sk_buff *skb)
+{
+#ifdef CONFIG_NETPOLL
+	if (use_netpoll && !use_qdisc) {
+		netpoll_send_skb(&mitm->np, skb);
+		return NETDEV_TX_OK;
+	}
+#endif
+
+	if (irqs_disabled() || use_tasklet) {
+		skb_queue_tail(&mitm->txqueue, skb);
+		tasklet_schedule(&mitm->tx_tasklet);
+		return NETDEV_TX_OK;
+	}
+
+	return __mitm_xmit(mitm, skb);
+}
 
 enum mitm_handler_result forward(struct mitm *mitm __maybe_unused, struct sk_buff *skb __maybe_unused)
 {
@@ -228,7 +294,7 @@ static netdev_tx_t mitm_start_xmit(struct sk_buff *skb, struct net_device *dev)
 			// Associate the packet with the slave
 			skb->dev = slave->dev;
 			// Mode-dependent transmit.
-			return mitm->xmit(mitm, skb);
+			return mitm_xmit(mitm, skb);
 		case MITM_CONSUMED:
 			return NETDEV_TX_OK;
 		default:
@@ -253,52 +319,6 @@ static inline netdev_tx_t __packet_xmit_irq_enabled(netdev_tx_t (*xmit)(struct s
 		local_irq_disable();
 
 	return ret;
-}
-static netdev_tx_t packet_queue_xmit(struct mitm *mitm, struct sk_buff *skb)
-{
-	BUILD_BUG_ON(sizeof(skb->queue_mapping) !=
-		     sizeof(qdisc_skb_cb(skb)->slave_dev_queue_mapping));
-	skb_set_queue_mapping(skb, qdisc_skb_cb(skb)->slave_dev_queue_mapping);
-
-	return __packet_xmit_irq_enabled(dev_queue_xmit, skb);
-}
-static netdev_tx_t packet_direct_xmit(struct mitm *mitm, struct sk_buff *skb)
-{
-	return __packet_xmit_irq_enabled(__packet_direct_xmit, skb);
-}
-static netdev_tx_t packet_netpoll_xmit(struct mitm *mitm, struct sk_buff *skb)
-{
-#ifdef CONFIG_NETPOLL
-	netpoll_send_skb(&mitm->np, skb);
-#endif
-	return NETDEV_TX_OK;
-}
-
-/* Taken out of net/packet/af_packet.c */
-static u16 packet_pick_tx_queue(struct sk_buff *skb)
-{
-	struct net_device *dev = skb->dev;
-	const struct net_device_ops *ops = dev->netdev_ops;
-	int cpu = raw_smp_processor_id();
-	u16 queue_index;
-
-#ifdef CONFIG_XPS
-	skb->sender_cpu = cpu + 1;
-#endif
-	skb_record_rx_queue(skb, cpu % dev->real_num_tx_queues);
-	if (ops->ndo_select_queue) {
-		queue_index = ops->ndo_select_queue(dev, skb, NULL);
-		queue_index = netdev_cap_txqueue(dev, queue_index);
-	} else {
-		queue_index = netdev_pick_tx(dev, skb, NULL);
-	}
-
-	return queue_index;
-}
-
-static int __packet_direct_xmit(struct sk_buff *skb)
-{
-	return dev_direct_xmit(skb, packet_pick_tx_queue(skb));
 }
 
 /*-------------------------- Bonding Notification ---------------------------*/
@@ -472,6 +492,10 @@ static int mitm_enslave(struct net_device *mitm_dev,
 
 	netdev_info(mitm_dev, "Enslaving %s interface\n", slave_dev->name);
 
+	skb_queue_head_init(&mitm->txqueue);
+
+	tasklet_init(&mitm->tx_tasklet, mitm_xmit_bh, 0);
+
 	return 0;
 
 	/* Undo stages on error */
@@ -601,11 +625,7 @@ void mitm_setup(struct net_device *mitm_dev)
 	ether_setup(mitm_dev); /* assign some of the fields */
 
 	mitm_dev->netdev_ops = &mitm_netdev_ops;
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 11, 9)
 	mitm_dev->needs_free_netdev = true;
-#else
-	mitm_dev->destructor = free_netdev;
-#endif
 
 }
 
@@ -679,10 +699,6 @@ static ssize_t debugfs_set_slave(struct file *file, const char __user *buff,
 		}
 #endif
 
-		mitm->xmit = use_qdisc   ? packet_queue_xmit
-			   : use_netpoll ? packet_netpoll_xmit
-			   :               packet_direct_xmit;
-
 		netdev_info(mitm_dev, "%s mode will be used on %s\n",
 		       use_qdisc   ? "Qdisc"
 		     : use_netpoll ? "Netpoll"
@@ -690,7 +706,6 @@ static ssize_t debugfs_set_slave(struct file *file, const char __user *buff,
 		       slave_dev->name);
 
 	} else {
-		mitm->xmit = NULL; /* FIXME might be racy... */
 #ifdef CONFIG_NETPOLL
 		if (mitm->np.dev) {
 			netpoll_cleanup(&mitm->np);
