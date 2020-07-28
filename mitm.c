@@ -1,10 +1,11 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * mitm.c  --  man-in-the-middle another network interface
- * Copyright (C) 2017 Ahmad Fatoum
+ * Copyright (C) 2017,2020 Ahmad Fatoum
  *
  * Based on the drivers/net/bonding/bond_main.c
  * Copyright 1999, Thomas Davis, tadavis@lbl.gov.
- * Licensed under the GPL. Itself based on dummy.c, and eql.c devices.
+ * Itself based on dummy.c, and eql.c devices.
  */
 
 #include <linux/version.h>
@@ -186,6 +187,7 @@ static rx_handler_result_t mitm_handle_frame(struct sk_buff **pskb)
 		// Mode-dependent transmit.
 		(void)mitm->xmit(mitm, skb);
 		// Consumed because is queued elsewhere.
+		/* fall through */
 	case MITM_CONSUMED:
 		return RX_HANDLER_CONSUMED;
 	default: // Drop.
@@ -273,98 +275,60 @@ static netdev_tx_t packet_netpoll_xmit(struct mitm *mitm, struct sk_buff *skb)
 }
 
 /* Taken out of net/packet/af_packet.c */
-static u16 __packet_pick_tx_queue(struct net_device *dev, struct sk_buff *skb)
-{
-	return (u16) raw_smp_processor_id() % dev->real_num_tx_queues;
-}
-
-
-static void packet_pick_tx_queue(struct net_device *dev, struct sk_buff *skb)
-{
-	const struct net_device_ops *ops = dev->netdev_ops;
-	u16 queue_index;
-
-	if (ops->ndo_select_queue) {
-		queue_index = ops->ndo_select_queue(dev, skb, NULL,
-						    __packet_pick_tx_queue);
-		queue_index = netdev_cap_txqueue(dev, queue_index);
-	} else {
-		queue_index = __packet_pick_tx_queue(dev, skb);
-	}
-
-	skb_set_queue_mapping(skb, queue_index);
-}
-static int __packet_direct_xmit(struct sk_buff *skb)
+static u16 packet_pick_tx_queue(struct sk_buff *skb)
 {
 	struct net_device *dev = skb->dev;
-	struct sk_buff *orig_skb = skb;
-	struct netdev_queue *txq;
-	int ret = NETDEV_TX_BUSY;
+	const struct net_device_ops *ops = dev->netdev_ops;
+	int cpu = raw_smp_processor_id();
+	u16 queue_index;
 
-	if (unlikely(!netif_running(dev) || !netif_carrier_ok(dev)))
-		goto drop;
+#ifdef CONFIG_XPS
+	skb->sender_cpu = cpu + 1;
+#endif
+	skb_record_rx_queue(skb, cpu % dev->real_num_tx_queues);
+	if (ops->ndo_select_queue) {
+		queue_index = ops->ndo_select_queue(dev, skb, NULL);
+		queue_index = netdev_cap_txqueue(dev, queue_index);
+	} else {
+		queue_index = netdev_pick_tx(dev, skb, NULL);
+	}
 
-	skb = validate_xmit_skb_list(skb, dev);
-	if (skb != orig_skb)
-		goto drop;
+	return queue_index;
+}
 
-	packet_pick_tx_queue(dev, skb);
-	txq = skb_get_tx_queue(dev, skb);
-
-	local_bh_disable();
-
-	HARD_TX_LOCK(dev, txq, smp_processor_id());
-	if (!netif_xmit_frozen_or_drv_stopped(txq))
-		ret = netdev_start_xmit(skb, dev, txq, false);
-	HARD_TX_UNLOCK(dev, txq);
-
-	local_bh_enable();
-
-	if (!dev_xmit_complete(ret))
-		kfree_skb(skb);
-
-	return ret;
-drop:
-	atomic_long_inc(&dev->tx_dropped);
-	kfree_skb_list(skb);
-	return NET_XMIT_DROP;
+static int __packet_direct_xmit(struct sk_buff *skb)
+{
+	return dev_direct_xmit(skb, packet_pick_tx_queue(skb));
 }
 
 /*-------------------------- Bonding Notification ---------------------------*/
 
 static int mitm_master_upper_dev_link(struct mitm *mitm, struct slave *slave)
 {
-	int err;
-	/* we aggregate everything into one link, so that's technically a broadcast */
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 5, 0)
-	struct netdev_lag_upper_info lag_upper_info = {
-		.tx_type = NETDEV_LAG_TX_TYPE_BROADCAST
-	};
+	struct netdev_lag_upper_info lag_upper_info;
 
-	err = netdev_master_upper_dev_link(slave->dev, mitm->dev, slave, &lag_upper_info);
-#else
-	err = netdev_master_upper_dev_link(slave->dev, mitm->dev);
-#endif
-	if (err)
-		return err;
-	rtmsg_ifinfo(RTM_NEWLINK, slave->dev, IFF_SLAVE, GFP_KERNEL);
-	return 0;
+	lag_upper_info.tx_type = NETDEV_LAG_TX_TYPE_BROADCAST;
+	lag_upper_info.hash_type = NETDEV_LAG_HASH_NONE;
+
+	return netdev_master_upper_dev_link(slave->dev, mitm->dev, slave,
+					    &lag_upper_info, NULL);
 }
 
 static void mitm_upper_dev_unlink(struct mitm *mitm, struct slave *slave)
 {
 	netdev_upper_dev_unlink(slave->dev, mitm->dev);
 	slave->dev->flags &= ~IFF_SLAVE;
-	rtmsg_ifinfo(RTM_NEWLINK, slave->dev, IFF_SLAVE, GFP_KERNEL);
 }
+
 /* FIXME unused */
 #if 0
-static void bond_lower_state_changed(struct slave *slave)
+void bond_lower_state_changed(struct slave *slave)
 {
 	struct netdev_lag_lower_state_info info;
 
-	info.link_up = slave->link_up;
-	info.tx_enabled = slave->dev != NULL;
+	info.link_up = slave->link == BOND_LINK_UP ||
+		       slave->link == BOND_LINK_FAIL;
+	info.tx_enabled = bond_is_active_slave(slave);
 	netdev_lower_state_changed(slave->dev, &info);
 }
 #endif
@@ -463,7 +427,7 @@ static int mitm_enslave(struct net_device *mitm_dev,
 	slave_dev->flags |= IFF_SLAVE;
 
 	/* open the slave since the application closed it */
-	res = dev_open(slave_dev);
+	res = dev_open(slave_dev, NULL);
 	if (res) {
 		netdev_err(mitm_dev, "Opening slave %s failed\n", slave_dev->name);
 		goto err_unslave;
